@@ -4,74 +4,72 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="自由進度学習支援アプリケーション">
-  <title>みらいコンパス v12.0</title>
+  <title>みらいコンパス</title>
   
-  <!-- CSS Libraries -->
+  <!-- ライブラリの読み込み -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
   
-  <!-- Google Fonts (Preconnect for performance) -->
+  <!-- Google Fonts (Zen Maru Gothic) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
   
-  <!-- Custom CSS -->
+  <!-- CSSの埋め込み -->
   <?!= HtmlService.createHtmlOutputFromFile('css').getContent(); ?>
 </head>
 <body class="bg-light">
 
-  <!-- ====================
-       Audio Assets
-  ==================== -->
-  <!-- SOS通知音 (Simple Chime) -->
-  <audio id="sos-chime" preload="auto" src="data:audio/mp3;base64,//uQRAAAAWMSLwUIYAAsYkXgoQwAEaYLWfkWgAI0wWs/ItAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKS"></audio>
+  <!-- SOS通知音 (Base64) -->
+  <audio id="sos-chime" preload="auto" src="data:audio/mp3;base64,//uQRAAAAWMSLwUIYAAsYkXgoQwAEaYLWfkWgAI0wWs/ItAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKS"></audio>
 
-  <!-- ====================
-       Loading Overlay
-  ==================== -->
-  <div id="loading" class="position-fixed w-100 h-100 top-0 start-0 d-flex justify-content-center align-items-center bg-white" style="z-index: 9999;">
-    <div class="text-center">
-      <div class="spinner-grow text-primary" role="status" aria-hidden="true"></div>
-      <p class="mt-2 fw-bold text-muted" role="status"><ruby>読<rt>よ</rt></ruby>み<ruby>込<rt>こ</rt></ruby>み<ruby>中<rt>ちゅう</rt></ruby>...</p>
+  <!-- ローディング画面 -->
+  <div id="loading" class="position-fixed w-100 h-100 top-0 start-0 d-flex flex-column justify-content-center align-items-center bg-white" style="z-index: 9999;">
+    <!-- コンパスのアニメーション -->
+    <div class="compass-loader mb-3">
+      <div class="compass-needle"></div>
     </div>
+    <p class="mt-2 fw-bold text-muted spacing-1">みらいコンパス<br><span style="font-size:0.8rem">読み込み中...</span></p>
   </div>
 
-  <!-- ====================
-       Navigation Bar
-  ==================== -->
-  <nav class="navbar sticky-top bg-white shadow-sm mb-4 transition-bg">
-    <div class="container">
+  <!-- ナビゲーションバー -->
+  <nav class="navbar sticky-top bg-white shadow-sm mb-0 transition-bg">
+    <div class="container d-flex justify-content-between align-items-center">
       <span class="navbar-brand d-flex align-items-center fw-bold text-primary">
-        <i class="bi bi-compass-fill me-2 fs-4"></i>
-        <span>みらいコンパス v12.0</span>
+        <i class="bi bi-compass-fill me-2 fs-4 compass-icon"></i>
+        <span><ruby>みらい<rt>みらい</rt></ruby>コンパス</span>
       </span>
+      
+      <!-- 単元選択（PC用） -->
+      <div id="unit-selector-container" class="mx-auto d-none d-md-block" style="min-width: 250px;">
+        <!-- JSでここに挿入 -->
+      </div>
+      
+      <!-- 設定ボタン -->
       <div>
-        <button class="btn btn-outline-secondary btn-sm rounded-pill border-0" type="button" onclick="toggleSettings()" aria-label="設定を開く">
+        <button class="btn btn-outline-secondary btn-sm rounded-pill border-0" type="button" onclick="toggleSettings()" aria-label="設定">
           <i class="bi bi-gear-fill fs-5"></i>
         </button>
       </div>
     </div>
+    
+    <!-- 単元選択（スマホ用） -->
+    <div class="container d-md-none mt-2 pb-2">
+      <div id="unit-selector-mobile" class="w-100"></div>
+    </div>
   </nav>
 
-  <!-- ====================
-       Main Content
-  ==================== -->
-  <main class="container mb-5">
-    <div id="app-container">
-      <!-- JavaScriptによってここにコンテンツが描画されます -->
-    </div>
+  <!-- メインコンテンツ -->
+  <main class="container">
+    <div id="app-container"></div>
   </main>
 
-  <!-- ====================
-       Footer
-  ==================== -->
-  <footer class="text-center text-muted py-3 mt-4 border-top transition-bg">
-    <small>&copy; 2026 みらいコンパス <a href="https://note.com/cute_borage86" target="_blank" rel="noopener noreferrer" class="text-decoration-none text-muted">GIGA山</a></small>
+  <!-- フッター -->
+  <footer class="text-center text-muted py-2 border-top transition-bg">
+    <small>&copy; 2026 みらいコンパス <a href="#" onclick="return false;" class="text-decoration-none text-muted">GIGA山</a></small>
   </footer>
 
-  <!-- ====================
-       Settings Modal
-  ==================== -->
+  <!-- 設定モーダル -->
   <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
     <div class="modal-dialog">
       <div class="modal-content rounded-4 shadow border-0 transition-bg">
@@ -80,7 +78,6 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <!-- モード切替 -->
           <div class="d-grid gap-2 mb-3">
             <button class="btn btn-light text-start py-3 rounded-3" onclick="switchMode('student')">
               <i class="bi bi-person-fill me-3 text-primary"></i><ruby>児童<rt>じどう</rt></ruby>モードへ
@@ -90,28 +87,25 @@
             </button>
           </div>
           <hr>
-          
-          <!-- テーマ設定 -->
           <div class="d-flex justify-content-between align-items-center mb-3">
             <span><i class="bi bi-moon-stars-fill me-2 text-warning"></i>ダークモード</span>
             <div class="form-check form-switch">
               <input class="form-check-input" type="checkbox" id="darkModeSwitch" onchange="toggleDarkMode()">
             </div>
           </div>
-          
-          <!-- 音声設定 (先生用) -->
           <div class="d-flex justify-content-between align-items-center mb-3" id="sound-setting-area">
-            <span><i class="bi bi-volume-up-fill me-2 text-info"></i>SOS通知音</span>
+            <span><i class="bi bi-volume-up-fill me-2 text-info"></i>SOS<ruby>通知音<rt>つうちおん</rt></ruby></span>
             <div class="form-check form-switch">
               <input class="form-check-input" type="checkbox" id="soundSwitch" onchange="toggleSound()" checked>
             </div>
           </div>
           <hr>
-          
-          <!-- データリンク -->
-          <div class="d-grid">
+          <div class="d-grid gap-2">
             <button class="btn btn-outline-primary rounded-pill" id="btn-view-ss">
               <i class="bi bi-table me-2"></i>データファイルを開く
+            </button>
+            <button class="btn btn-outline-danger rounded-pill d-none" id="btn-archive" onclick="confirmArchive()">
+              <i class="bi bi-archive-fill me-2"></i><ruby>現在<rt>げんざい</rt></ruby>の<ruby>単元<rt>たんげん</rt></ruby>をアーカイブ
             </button>
           </div>
         </div>
@@ -119,24 +113,18 @@
     </div>
   </div>
 
-  <!-- ====================
-       Scripts
-  ==================== -->
-  <!-- Bootstrap 5 -->
+  <!-- ライブラリ群 -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-  <!-- SweetAlert2 -->
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <!-- Chart.js (v9.0以降で必要) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- Sortable.js (v11.0以降で必要) -->
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 
-  <!-- Initialize Variables from Server -->
   <script>
+    // サーバーサイドから渡された初期モード設定
     const INITIAL_MODE = '<?!= mode ?>';
   </script>
-
-  <!-- Client Side Logic -->
+  
+  <!-- クライアントサイドJSの読み込み -->
   <?!= HtmlService.createHtmlOutputFromFile('js').getContent(); ?>
 </body>
 </html>
