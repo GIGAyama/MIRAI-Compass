@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="自由進度学習支援アプリケーション">
   <title>みらいコンパス</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%231a73e8' class='bi bi-compass-fill' viewBox='0 0 16 16'%3E%3Cpath d='M15.5 8.516a7.5 7.5 0 1 1-9.462-7.24A7.5 7.5 0 0 1 15.5 8.516zM6.95.435c.58-.58 1.52-.58 2.1 0l6.515 6.516c.58.58.58 1.519 0 2.098L9.05 15.565c-.58.58-1.519.58-2.098 0L.435 9.05a1.482 1.482 0 0 1 0-2.098L6.95.435zM8 12v-3.5l-3.5.5L8 12zm0-9v3.5l3.5-.5L8 3z'/%3E%3C/svg%3E">
   
   <!-- ライブラリの読み込み -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -21,7 +22,7 @@
 <body class="bg-light">
 
   <!-- SOS通知音 (Base64) -->
-  <audio id="sos-chime" preload="auto" src="data:audio/mp3;base64,//uQRAAAAWMSLwUIYAAsYkXgoQwAEaYLWfkWgAI0wWs/ItAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKS"></audio>
+  <audio id="sos-chime" preload="auto" src="data:audio/mp3;base64,//uQRAAAAWMSLwUIYAAsYkXgoQwAEaYLWfkWgAI0wWs/ItAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKS"></audio>
 
   <!-- ローディング画面 -->
   <div id="loading" class="position-fixed w-100 h-100 top-0 start-0 d-flex flex-column justify-content-center align-items-center bg-white" style="z-index: 9999;">
@@ -29,7 +30,7 @@
     <div class="compass-loader mb-3">
       <div class="compass-needle"></div>
     </div>
-    <p class="mt-2 fw-bold text-muted spacing-1">みらいコンパス<br><span style="font-size:0.8rem">読み込み中...</span></p>
+    <p class="mt-2 fw-bold text-muted spacing-1">みらいコンパス<br><span style="font-size:0.8rem"><ruby>読<rt>よ</rt></ruby>み<ruby>込<rt>こ</rt></ruby>み<ruby>中<rt>ちゅう</rt></ruby>...</span></p>
   </div>
 
   <!-- ナビゲーションバー -->
@@ -37,7 +38,7 @@
     <div class="container d-flex justify-content-between align-items-center">
       <span class="navbar-brand d-flex align-items-center fw-bold text-primary">
         <i class="bi bi-compass-fill me-2 fs-4 compass-icon"></i>
-        <span><ruby>みらい<rt>みらい</rt></ruby>コンパス</span>
+        <span>みらいコンパス</span>
       </span>
       
       <!-- 単元選択（PC用） -->
@@ -45,9 +46,15 @@
         <!-- JSでここに挿入 -->
       </div>
       
-      <!-- 設定ボタン -->
-      <div>
-        <button class="btn btn-outline-secondary btn-sm rounded-pill border-0" type="button" onclick="toggleSettings()" aria-label="設定">
+      <!-- 設定ボタンエリア -->
+      <div class="d-flex align-items-center">
+        <!-- 児童モードへ戻るボタン (先生モード時のみJSで表示制御) -->
+        <button class="btn btn-outline-primary btn-sm rounded-pill border-0 d-none me-2" id="btn-exit-teacher" type="button" onclick="switchMode('student')" aria-label="児童モードへ戻る">
+          <i class="bi bi-person-fill me-1"></i>児童モードへ戻る
+        </button>
+
+        <!-- 設定ボタン (先生モード時のみJSで表示制御) -->
+        <button class="btn btn-outline-secondary btn-sm rounded-pill border-0 d-none" id="btn-settings" type="button" onclick="toggleSettings()" aria-label="設定">
           <i class="bi bi-gear-fill fs-5"></i>
         </button>
       </div>
@@ -65,11 +72,12 @@
   </main>
 
   <!-- フッター -->
-  <footer class="text-center text-muted py-2 border-top transition-bg">
-    <small>&copy; 2026 みらいコンパス <a href="#" onclick="return false;" class="text-decoration-none text-muted">GIGA山</a></small>
+  <footer class="text-center text-muted py-2 border-top transition-bg d-flex justify-content-center align-items-center gap-3">
+    <small>&copy; 2026 みらいコンパス <a href="https://note.com/cute_borage86" target="_blank" class="text-decoration-none text-muted">GIGA山</a></small>
+    <a href="#" class="text-decoration-none text-muted small" style="font-size:0.75rem;" onclick="attemptTeacherLogin(); return false;">教員用ログイン</a>
   </footer>
 
-  <!-- 設定モーダル -->
+  <!-- 設定モーダル（先生専用） -->
   <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
     <div class="modal-dialog">
       <div class="modal-content rounded-4 shadow border-0 transition-bg">
@@ -78,34 +86,24 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <div class="d-grid gap-2 mb-3">
-            <button class="btn btn-light text-start py-3 rounded-3" onclick="switchMode('student')">
-              <i class="bi bi-person-fill me-3 text-primary"></i><ruby>児童<rt>じどう</rt></ruby>モードへ
-            </button>
-            <button class="btn btn-light text-start py-3 rounded-3" onclick="switchMode('teacher')">
-              <i class="bi bi-person-badge-fill me-3 text-success"></i><ruby>先生<rt>せんせい</rt></ruby>モードへ
-            </button>
-          </div>
-          <hr>
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <span><i class="bi bi-moon-stars-fill me-2 text-warning"></i>ダークモード</span>
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" id="darkModeSwitch" onchange="toggleDarkMode()">
-            </div>
-          </div>
-          <div class="d-flex justify-content-between align-items-center mb-3" id="sound-setting-area">
-            <span><i class="bi bi-volume-up-fill me-2 text-info"></i>SOS<ruby>通知音<rt>つうちおん</rt></ruby></span>
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" id="soundSwitch" onchange="toggleSound()" checked>
-            </div>
-          </div>
-          <hr>
+          <p class="text-muted small mb-3">※この画面は先生のみアクセスできます。</p>
+          
           <div class="d-grid gap-2">
+            <!-- 名簿管理ボタンの追加 -->
+            <button class="btn btn-outline-success rounded-pill mb-3" onclick="openRosterManagerModal()">
+              <i class="bi bi-people-fill me-2"></i>名簿管理
+            </button>
+            
+            <hr class="my-1">
+
             <button class="btn btn-outline-primary rounded-pill" id="btn-view-ss">
               <i class="bi bi-table me-2"></i>データファイルを開く
             </button>
-            <button class="btn btn-outline-danger rounded-pill d-none" id="btn-archive" onclick="confirmArchive()">
+            <button class="btn btn-outline-danger rounded-pill" id="btn-archive" onclick="confirmArchive()">
               <i class="bi bi-archive-fill me-2"></i><ruby>現在<rt>げんざい</rt></ruby>の<ruby>単元<rt>たんげん</rt></ruby>をアーカイブ
+            </button>
+            <button class="btn btn-outline-secondary rounded-pill mt-2" onclick="changePasswordPrompt()">
+              <i class="bi bi-key me-2"></i>パスワード変更
             </button>
           </div>
         </div>
@@ -120,8 +118,8 @@
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 
   <script>
-    // サーバーサイドから渡された初期モード設定
-    const INITIAL_MODE = '<?!= mode ?>';
+    // 初期モードは強制的にstudent
+    const INITIAL_MODE = 'student';
   </script>
   
   <!-- クライアントサイドJSの読み込み -->
