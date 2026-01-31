@@ -774,6 +774,25 @@ function importUnitJson(jsonStr) {
     checkAndFixSheets(ss);
     
     const data = JSON.parse(jsonStr);
+
+    // データの正規化（揺らぎ吸収）
+    if (!data.unitInfo) data.unitInfo = {};
+    
+    // 1. 単元名の読み替え (unitName -> title)
+    if (!data.unitInfo.title && data.unitInfo.unitName) {
+      data.unitInfo.title = data.unitInfo.unitName;
+    }
+    
+    // 2. 学年の型変換 (数値 -> 文字列)
+    if (data.unitInfo.grade && typeof data.unitInfo.grade !== 'string') {
+      data.unitInfo.grade = String(data.unitInfo.grade);
+    }
+    
+    // 3. titleがない場合のフォールバック
+    if (!data.unitInfo.title) {
+      data.unitInfo.title = "無題の単元";
+    }
+
     const uid = "U" + Utilities.formatDate(new Date(), "JST", "yyyyMMddHHmm");
     const uInfoStr = JSON.stringify(data.unitInfo || {});
     const totalHours = data.unitInfo?.totalHours || 8;
@@ -860,6 +879,38 @@ function archiveUnitData(unitId, unitTitle) {
     });
 
   } catch(e) { return createErrorResponse(e); }
+}
+
+/**
+ * 単元の基本情報（タイトル、めあて、概要など）を更新する関数
+ */
+function updateUnitBasicInfo(unitId, infoData) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
+    const data = sheet.getDataRange().getValues();
+    
+    // ヘッダーを除外して全行をチェック
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === String(unitId)) {
+        // 現在のunitInfoを取得してマージ
+        let currentInfo = safeJsonParse(data[i][14]);
+        
+        // 更新項目を反映
+        if (infoData.title !== undefined) currentInfo.title = infoData.title;
+        if (infoData.subject !== undefined) currentInfo.subject = infoData.subject;
+        if (infoData.grade !== undefined) currentInfo.grade = infoData.grade;
+        if (infoData.goal !== undefined) currentInfo.goal = infoData.goal;
+        if (infoData.description !== undefined) currentInfo.description = infoData.description;
+        
+        // unitInfoカラム(列15)を更新
+        sheet.getRange(i + 1, 15).setValue(JSON.stringify(currentInfo));
+      }
+    }
+    return createSuccessResponse({ message: '単元情報を更新しました' });
+  } catch (e) {
+    return createErrorResponse(e);
+  }
 }
 
 // ==========================================
