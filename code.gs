@@ -9,7 +9,7 @@
 // ==========================================
 
 const PROPERTIES = PropertiesService.getScriptProperties();
-const APP_TITLE = 'みらいコンパス';
+const APP_TITLE = 'みらいコンパス Ver. 1.10';
 
 /**
  * データベース（スプレッドシート）の設計図
@@ -51,7 +51,6 @@ const DB_SCHEMA = {
     name: 'ClassSchedule',
     headers: ['scheduleId', 'classId', 'date', 'startTime', 'endTime', 'unitId', 'hour', 'message', 'createdAt']
   },
-  // 新規追加: 児童名簿
   StudentRoster: {
     name: 'StudentRoster',
     headers: ['rosterId', 'classId', 'studentNumber', 'studentName', 'isActive', 'updatedAt']
@@ -159,12 +158,11 @@ function getData() {
       x: Number(r[8]) || 0, y: Number(r[9]) || 0
     }));
 
-    // 名簿データの取得
     const rosterData = fetchSheetData(ss, DB_SCHEMA.StudentRoster.name).map(r => ({
       classId: String(r[1]),
       name: String(r[3]),
       number: String(r[2] || "")
-    })).filter(r => r.name); // 名前があるもののみ
+    })).filter(r => r.name);
 
     const clsProgress = {};
     fetchSheetData(ss, DB_SCHEMA.LearningLogs.name).forEach(r => {
@@ -363,6 +361,10 @@ function updateStatus(studentName, taskId, taskTitle, status, mode, reflection, 
   } catch (e) { return createErrorResponse(e); }
 }
 
+/**
+ * 単元マスタのタスク情報を更新する関数（先生用）
+ * [改修] textbook, tablet, print の更新処理を追加
+ */
 function updateUnitTask(taskId, updateData) {
   try {
     const ss = getSpreadsheet();
@@ -383,6 +385,12 @@ function updateUnitTask(taskId, updateData) {
       if (updateData.estTime !== undefined) sheet.getRange(rowIndex, 6).setValue(updateData.estTime);
       if (updateData.category !== undefined) sheet.getRange(rowIndex, 8).setValue(updateData.category);
       if (updateData.step !== undefined) sheet.getRange(rowIndex, 9).setValue(updateData.step);
+      
+      // 追加: 教材情報の更新
+      if (updateData.textbook !== undefined) sheet.getRange(rowIndex, 10).setValue(updateData.textbook);
+      if (updateData.tablet !== undefined) sheet.getRange(rowIndex, 11).setValue(updateData.tablet);
+      if (updateData.print !== undefined) sheet.getRange(rowIndex, 12).setValue(updateData.print);
+
       if (updateData.format !== undefined) sheet.getRange(rowIndex, 14).setValue(updateData.format);
       if (updateData.type !== undefined) sheet.getRange(rowIndex, 3).setValue(updateData.type);
       
@@ -395,24 +403,75 @@ function updateUnitTask(taskId, updateData) {
   }
 }
 
-function updateUnitTotalHours(unitId, newTotalHours) {
+/**
+ * 単元に新しいタスクを追加する関数（先生用）
+ * [改修] textbook, tablet, print の登録処理を追加
+ */
+function addUnitTask(unitId, taskData) {
   try {
     const ss = getSpreadsheet();
     const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
     const data = sheet.getDataRange().getValues();
     
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(unitId)) { 
-        sheet.getRange(i + 1, 16).setValue(newTotalHours);
-        
-        let info = safeJsonParse(data[i][14]);
-        if (info) {
-          info.totalHours = newTotalHours;
-          sheet.getRange(i + 1, 15).setValue(JSON.stringify(info));
-        }
+    let refRow = null;
+    for(let i=1; i<data.length; i++) {
+      if(String(data[i][0]) === String(unitId)) {
+        refRow = data[i];
+        break;
       }
     }
-    return createSuccessResponse({ message: '時数を更新しました' });
+    
+    if(!refRow) throw new Error('単元が見つかりません');
+    
+    const taskId = "T" + Utilities.getUuid().substring(0, 8);
+    
+    const newRow = [
+      unitId,
+      taskId,
+      taskData.type || 'must',
+      taskData.title || '無題',
+      taskData.description || '',
+      taskData.estTime || 15,
+      '', 
+      taskData.category || 'まなぶ',
+      taskData.step || '',
+      taskData.textbook || '', // textbook (index 9)
+      taskData.tablet || '',   // tablet (index 10)
+      taskData.print || '',    // print (index 11)
+      '', 
+      taskData.format || 'student',
+      refRow[14], 
+      refRow[15] 
+    ];
+    
+    sheet.appendRow(newRow);
+    return createSuccessResponse({ taskId: taskId, message: 'タスクを追加しました' });
+    
+  } catch(e) {
+    return createErrorResponse(e);
+  }
+}
+
+function deleteUnitTask(taskId) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
+    const data = sheet.getDataRange().getValues();
+    let rowIndex = -1;
+
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][1]) === String(taskId)) {
+        rowIndex = i + 1;
+        break;
+      }
+    }
+
+    if (rowIndex > 0) {
+      sheet.deleteRow(rowIndex);
+      return createSuccessResponse({ message: '削除しました' });
+    } else {
+      throw new Error('タスクが見つかりません');
+    }
   } catch (e) {
     return createErrorResponse(e);
   }
@@ -463,107 +522,71 @@ function createNewUnit(unitInfo) {
   }
 }
 
-function addUnitTask(unitId, taskData) {
+function updateUnitTotalHours(unitId, newTotalHours) {
   try {
     const ss = getSpreadsheet();
     const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
     const data = sheet.getDataRange().getValues();
     
-    let refRow = null;
-    for(let i=1; i<data.length; i++) {
-      if(String(data[i][0]) === String(unitId)) {
-        refRow = data[i];
-        break;
-      }
-    }
-    
-    if(!refRow) throw new Error('単元が見つかりません');
-    
-    const taskId = "T" + Utilities.getUuid().substring(0, 8);
-    
-    const newRow = [
-      unitId,
-      taskId,
-      taskData.type || 'must',
-      taskData.title || '無題',
-      taskData.description || '',
-      taskData.estTime || 15,
-      '', 
-      taskData.category || 'まなぶ',
-      taskData.step || '',
-      '', 
-      '', 
-      '', 
-      '', 
-      taskData.format || 'student',
-      refRow[14], 
-      refRow[15] 
-    ];
-    
-    sheet.appendRow(newRow);
-    return createSuccessResponse({ taskId: taskId, message: 'タスクを追加しました' });
-    
-  } catch(e) {
-    return createErrorResponse(e);
-  }
-}
-
-function deleteUnitTask(taskId) {
-  try {
-    const ss = getSpreadsheet();
-    const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
-    const data = sheet.getDataRange().getValues();
-    let rowIndex = -1;
-
     for (let i = 1; i < data.length; i++) {
-      if (String(data[i][1]) === String(taskId)) {
-        rowIndex = i + 1;
-        break;
+      if (String(data[i][0]) === String(unitId)) { 
+        sheet.getRange(i + 1, 16).setValue(newTotalHours);
+        let info = safeJsonParse(data[i][14]);
+        if (info) {
+          info.totalHours = newTotalHours;
+          sheet.getRange(i + 1, 15).setValue(JSON.stringify(info));
+        }
       }
     }
-
-    if (rowIndex > 0) {
-      sheet.deleteRow(rowIndex);
-      return createSuccessResponse({ message: '削除しました' });
-    } else {
-      throw new Error('タスクが見つかりません');
-    }
+    return createSuccessResponse({ message: '時数を更新しました' });
   } catch (e) {
     return createErrorResponse(e);
   }
 }
 
-/**
- * 先生用：クラス名簿を保存する関数
- * 既存のクラスデータを洗い替えます。
- */
+function updateUnitBasicInfo(unitId, infoData) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
+    const data = sheet.getDataRange().getValues();
+    
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === String(unitId)) {
+        let currentInfo = safeJsonParse(data[i][14]);
+        if (infoData.title !== undefined) currentInfo.title = infoData.title;
+        if (infoData.subject !== undefined) currentInfo.subject = infoData.subject;
+        if (infoData.grade !== undefined) currentInfo.grade = infoData.grade;
+        if (infoData.goal !== undefined) currentInfo.goal = infoData.goal;
+        if (infoData.description !== undefined) currentInfo.description = infoData.description;
+        sheet.getRange(i + 1, 15).setValue(JSON.stringify(currentInfo));
+        if (infoData.title !== undefined) sheet.getRange(i + 1, 4).setValue(infoData.title);
+      }
+    }
+    return createSuccessResponse({ message: '単元情報を更新しました' });
+  } catch (e) {
+    return createErrorResponse(e);
+  }
+}
+
 function saveClassRoster(classId, nameList) {
   try {
     const ss = getSpreadsheet();
     const sheet = ss.getSheetByName(DB_SCHEMA.StudentRoster.name);
     const data = sheet.getDataRange().getValues();
     
-    // 既存の該当クラスデータを削除（逆順にループして削除）
     for (let i = data.length - 1; i >= 1; i--) {
       if (String(data[i][1]) === classId) {
         sheet.deleteRow(i + 1);
       }
     }
     
-    // 新しいデータを追加
     const rows = nameList.map(name => [
-      Utilities.getUuid(), // rosterId
-      classId,
-      '', // studentNumber (今回は省略)
-      name,
-      true, // isActive
-      new Date()
+      Utilities.getUuid(), classId, '', name, true, new Date()
     ]);
     
     if (rows.length > 0) {
       sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
     }
-    
     return createSuccessResponse({ message: `${classId}の名簿を更新しました（${rows.length}名）` });
   } catch (e) {
     return createErrorResponse(e);
@@ -691,7 +714,6 @@ function savePortfolioFeedback(studentName, unitId, feedback, stamp) {
     const ss = getSpreadsheet();
     const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
     const data = sheet.getDataRange().getValues();
-    
     let rowIndex = -1;
     for(let i = 1; i < data.length; i++) {
       if(data[i][0] === studentName && String(data[i][1]) === String(unitId)) { rowIndex = i + 1; break; }
@@ -707,18 +729,11 @@ function savePortfolioFeedback(studentName, unitId, feedback, stamp) {
   } catch(e) { return createErrorResponse(e); }
 }
 
-/**
- * ポートフォリオのフィードバックを一括保存する関数
- */
 function saveAllPortfolios(feedbackList) {
   try {
     const ss = getSpreadsheet();
     const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
-    // 全データを取得してメモリ上で照合
     const data = sheet.getDataRange().getValues();
-    const headers = data[0]; // ヘッダー行
-    
-    // 行のインデックスをマッピング (Key: "名前_単元ID", Value: 行番号(0始まり))
     const rowMap = new Map();
     for (let i = 1; i < data.length; i++) {
       const key = data[i][0] + "_" + data[i][1];
@@ -728,38 +743,25 @@ function saveAllPortfolios(feedbackList) {
     const rowsToAppend = [];
     const now = new Date();
 
-    // 入力されたリストをループ処理
     feedbackList.forEach(item => {
       const key = item.studentName + "_" + item.unitId;
       if (rowMap.has(key)) {
-        // 既存行がある場合：配列の値を更新
         const rowIndex = rowMap.get(key);
-        data[rowIndex][5] = item.feedback; // feedbackカラム
-        data[rowIndex][6] = item.stamp;    // stampカラム
+        data[rowIndex][5] = item.feedback; 
+        data[rowIndex][6] = item.stamp;    
       } else {
-        // 新規の場合：追加用配列に作成
         rowsToAppend.push([
-          item.studentName, 
-          item.unitId, 
-          "", // summary (未提出でもフィードバック先行入力可とする)
-          now, 
-          "", // classId (必要なら補完)
-          item.feedback, 
-          item.stamp
+          item.studentName, item.unitId, "", now, "", item.feedback, item.stamp
         ]);
       }
     });
 
-    // 1. 更新分をシートに一括書き戻し
     if (data.length > 1) {
       sheet.getRange(1, 1, data.length, data[0].length).setValues(data);
     }
-
-    // 2. 新規分を追記
     if (rowsToAppend.length > 0) {
       sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAppend.length, rowsToAppend[0].length).setValues(rowsToAppend);
     }
-
     return createSuccessResponse({ message: '一括保存しました' });
   } catch (e) {
     return createErrorResponse(e);
@@ -775,23 +777,10 @@ function importUnitJson(jsonStr) {
     
     const data = JSON.parse(jsonStr);
 
-    // データの正規化（揺らぎ吸収）
     if (!data.unitInfo) data.unitInfo = {};
-    
-    // 1. 単元名の読み替え (unitName -> title)
-    if (!data.unitInfo.title && data.unitInfo.unitName) {
-      data.unitInfo.title = data.unitInfo.unitName;
-    }
-    
-    // 2. 学年の型変換 (数値 -> 文字列)
-    if (data.unitInfo.grade && typeof data.unitInfo.grade !== 'string') {
-      data.unitInfo.grade = String(data.unitInfo.grade);
-    }
-    
-    // 3. titleがない場合のフォールバック
-    if (!data.unitInfo.title) {
-      data.unitInfo.title = "無題の単元";
-    }
+    if (!data.unitInfo.title && data.unitInfo.unitName) data.unitInfo.title = data.unitInfo.unitName;
+    if (data.unitInfo.grade && typeof data.unitInfo.grade !== 'string') data.unitInfo.grade = String(data.unitInfo.grade);
+    if (!data.unitInfo.title) data.unitInfo.title = "無題の単元";
 
     const uid = "U" + Utilities.formatDate(new Date(), "JST", "yyyyMMddHHmm");
     const uInfoStr = JSON.stringify(data.unitInfo || {});
@@ -881,38 +870,6 @@ function archiveUnitData(unitId, unitTitle) {
   } catch(e) { return createErrorResponse(e); }
 }
 
-/**
- * 単元の基本情報（タイトル、めあて、概要など）を更新する関数
- */
-function updateUnitBasicInfo(unitId, infoData) {
-  try {
-    const ss = getSpreadsheet();
-    const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
-    const data = sheet.getDataRange().getValues();
-    
-    // ヘッダーを除外して全行をチェック
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(unitId)) {
-        // 現在のunitInfoを取得してマージ
-        let currentInfo = safeJsonParse(data[i][14]);
-        
-        // 更新項目を反映
-        if (infoData.title !== undefined) currentInfo.title = infoData.title;
-        if (infoData.subject !== undefined) currentInfo.subject = infoData.subject;
-        if (infoData.grade !== undefined) currentInfo.grade = infoData.grade;
-        if (infoData.goal !== undefined) currentInfo.goal = infoData.goal;
-        if (infoData.description !== undefined) currentInfo.description = infoData.description;
-        
-        // unitInfoカラム(列15)を更新
-        sheet.getRange(i + 1, 15).setValue(JSON.stringify(currentInfo));
-      }
-    }
-    return createSuccessResponse({ message: '単元情報を更新しました' });
-  } catch (e) {
-    return createErrorResponse(e);
-  }
-}
-
 // ==========================================
 //  5. Helper Functions (内部処理用)
 // ==========================================
@@ -951,21 +908,10 @@ function checkAndFixSheets(ss) {
   });
 }
 
-function createSuccessResponse(data = {}) {
- return { success: true, ...data }; 
-}
-
-function createErrorResponse(error) { 
- console.error(error); return { success: false, error: error.toString() }; 
-}
-
-function safeJsonParse(str) {
- try { return JSON.parse(str || '{}'); } catch(e) { return {}; } 
-}
-
-function formatDate(d) { 
- try { return Utilities.formatDate(new Date(d), "JST", "HH:mm"); } catch(e) { return ""; } 
-}
+function createSuccessResponse(data = {}) { return { success: true, ...data }; }
+function createErrorResponse(error) { console.error(error); return { success: false, error: error.toString() }; }
+function safeJsonParse(str) { try { return JSON.parse(str || '{}'); } catch(e) { return {}; } }
+function formatDate(d) { try { return Utilities.formatDate(new Date(d), "JST", "HH:mm"); } catch(e) { return ""; } }
 
 /**
  * [追加] 保存されたカスタムAIプロンプトを取得する
