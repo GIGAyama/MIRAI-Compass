@@ -1,7 +1,8 @@
 <script>
 /**
- * みらいコンパス Ver. 1.0 - クライアントサイドロジック
+ * みらいコンパス Ver. 1.1 - クライアントサイドロジック
  * * 画面の描画、ボタン操作、サーバーとの通信などを制御します。
+ * * Update: タスクへの外部リンク埋め込み機能を追加
  */
 
 // ==========================================
@@ -458,9 +459,25 @@ function renderApp() {
 
 function switchMode(newMode) {
   appState.mode = newMode;
-  renderApp();
+  
+  // 生徒モードへの切り替え時は、編集内容の反映を確実にするためデータを再取得する
   if(newMode === 'student') {
-    startAutoRefresh(); 
+    showLoading();
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res.success) {
+          updateDataStore(res.json);
+          renderApp(); // データ更新後に描画
+          startAutoRefresh();
+          hideLoading();
+        } else {
+          handleError({message: res.error});
+        }
+      })
+      .withFailureHandler(handleError)
+      .getData();
+  } else {
+    renderApp();
   }
 }
 
@@ -1024,12 +1041,46 @@ function renderTeacherView() {
 function setTeacherClass(cls) { appState.view.teacherClassId = cls; renderTeacherView(); }
 function setTeacherView(mode) { appState.view.teacher = mode; renderTeacherView(); }
 
+// ----------------------------------------------------
+//  ダッシュボード表示のディスパッチャ（スタイル制御を追加）
+// ----------------------------------------------------
+
 function renderTeacherDashboardContent() {
   const el = document.getElementById('t-area');
   if (!el) return;
+  
+  // スクロール位置の保存
   const scrollPos = el.scrollTop;
+  
+  // ■ 追加修正: 親要素(main)とコンテナのスクロール制御
+  const mainEl = document.querySelector('main');
+  const appContainer = document.getElementById('app-container');
 
-  if (appState.view.teacher === 'summaries') { renderSummaryListView(el); el.scrollTop = scrollPos; return; }
+  if (mainEl && appContainer) {
+    if (appState.view.teacher === 'design') {
+      // 設計モード: 画面全体を固定し、内部スクロールのみ有効化
+      mainEl.style.overflow = 'hidden';      
+      mainEl.style.display = 'flex';         
+      mainEl.style.flexDirection = 'column';
+      mainEl.style.paddingBottom = '0';      // フッター余白削除
+      
+      // コンテナを画面一杯に広げる
+      appContainer.classList.add('h-100');
+      appContainer.style.overflow = 'hidden';
+    } else {
+      // 通常モード: 設定をリセット
+      mainEl.style.overflow = '';
+      mainEl.style.display = '';
+      mainEl.style.flexDirection = '';
+      mainEl.style.paddingBottom = ''; 
+      
+      appContainer.classList.remove('h-100');
+      appContainer.style.overflow = '';
+    }
+  }
+
+  // ビューの振り分け
+  if (appState.view.teacher === 'summaries') { renderSummaryListView(el); if(scrollPos>0) el.scrollTop = scrollPos; return; }
   if (appState.view.teacher === 'seating') { renderSeatingView(el); return; }
   if (appState.view.teacher === 'control') { renderControlView(el); return; }
   if (appState.view.teacher === 'design') { renderTeacherDesignView(el); return; } 
@@ -1041,7 +1092,7 @@ function renderTeacherDashboardContent() {
     renderHeatmap(el, targetStudents);
   }
   
-  if(scrollPos > 0) el.scrollTop = scrollPos;
+  if(appState.view.teacher !== 'design' && scrollPos > 0) el.scrollTop = scrollPos;
 }
 
 // ----------------------------------------------------
@@ -1274,7 +1325,16 @@ function saveAllListFeedbacks() {
 // ------------------------------------
 
 function renderTeacherDesignView(container) {
-  container.className = "flex-grow-1 overflow-hidden d-flex flex-column";
+  // 1. 再描画前のスクロール位置を保存
+  const poolContainer = document.getElementById('teacher-pool-container');
+  const poolScrollY = poolContainer ? poolContainer.scrollTop : 0;
+
+  const designScrollContainer = document.getElementById('teacher-design-scroll-view');
+  const designScrollY = designScrollContainer ? designScrollContainer.scrollTop : 0;
+
+  // コンテナの設定: 親要素の高さ一杯に広げ、はみ出しを隠す
+  container.className = "d-flex flex-column flex-grow-1 overflow-hidden h-100";
+  container.style.height = "100%";
   
   const currentTasks = getCurrentUnitTasks(); 
   const totalHours = appState.unit.totalHours; 
@@ -1295,6 +1355,7 @@ function renderTeacherDesignView(container) {
     }
   });
 
+  // 未配置プールのカードHTML生成
   let taskPoolHtml = '';
   taskPool.forEach(t => {
     const borderClass = getCategoryColorClass(t.category);
@@ -1309,6 +1370,7 @@ function renderTeacherDesignView(container) {
       </div>`;
   });
 
+  // 時数レーンのカードHTML生成
   let hoursHtml = '';
   for(let i = 1; i <= totalHours; i++) {
     let hourTasksHtml = '';
@@ -1345,9 +1407,10 @@ function renderTeacherDesignView(container) {
       </div>`;
   }
 
-  // ★変更点：ヘッダー部分に編集ボタンを追加
+  // 全体のHTML構造
   container.innerHTML = `
-    <div class="d-flex justify-content-between align-items-center mb-3 p-3 pb-0">
+    <!-- ヘッダーエリア (flex-shrink-0で縮小させない) -->
+    <div class="d-flex justify-content-between align-items-center mb-3 p-3 pb-0 flex-shrink-0">
       <div class="d-flex align-items-center">
         <h5 class="fw-bold m-0 text-muted me-2">単元計画</h5>
         
@@ -1365,25 +1428,44 @@ function renderTeacherDesignView(container) {
         </div>
       </div>
     </div>
-    <div class="row flex-grow-1 h-100 px-3 pb-3" style="min-height:0;">
-      <!-- 左側：未配置プール -->
-      <div class="col-4 h-100 border-end bg-white rounded-start d-flex flex-column">
-        <div class="p-2 border-bottom fw-bold text-muted d-flex justify-content-between align-items-center">
+    
+    <!-- メインエリア（2カラム） -->
+    <!-- min-height:0 がflexアイテムのスクロールに必須 -->
+    <div class="row flex-grow-1 px-3 pb-3 mx-0" style="min-height:0; overflow:hidden;">
+      
+      <!-- 左カラム：未配置プール -->
+      <div class="col-4 h-100 p-0 d-flex flex-column border-end bg-white rounded-start overflow-hidden">
+        <div class="p-2 border-bottom fw-bold text-muted d-flex justify-content-between align-items-center flex-shrink-0">
           <span><i class="bi bi-inbox me-2"></i>未配置・その他</span>
           <button class="btn btn-outline-primary btn-sm rounded-circle" onclick="openTeacherTaskEditModal('NEW')"><i class="bi bi-plus"></i></button>
         </div>
+        <!-- 独立スクロールエリア -->
         <div id="teacher-pool-container" class="flex-grow-1 overflow-auto p-2 teacher-design-dropzone" data-step="">
           ${taskPoolHtml}
         </div>
       </div>
-      <!-- 右側：時数レーン -->
-      <div class="col-8 h-100 overflow-auto bg-light rounded-end">
-        <div class="p-3">
+      
+      <!-- 右カラム：時数レーン -->
+      <div class="col-8 h-100 p-0 d-flex flex-column bg-light rounded-end overflow-hidden">
+        <!-- 独立スクロールエリア -->
+        <div id="teacher-design-scroll-view" class="flex-grow-1 overflow-auto p-3">
           <div class="alert alert-info small py-2 mb-3"><i class="bi bi-info-circle me-2"></i>ここでの変更は<strong>全員の初期計画（デフォルト）</strong>として保存されます。</div>
           ${hoursHtml}
         </div>
       </div>
+      
     </div>`;
+
+  // 2. スクロール位置の復元
+  const newPoolContainer = document.getElementById('teacher-pool-container');
+  if (newPoolContainer && poolScrollY > 0) {
+    newPoolContainer.scrollTop = poolScrollY;
+  }
+
+  const newDesignScrollContainer = document.getElementById('teacher-design-scroll-view');
+  if (newDesignScrollContainer && designScrollY > 0) {
+    newDesignScrollContainer.scrollTop = designScrollY;
+  }
 
   // Sortableの設定
   const dropZones = document.querySelectorAll('.teacher-design-dropzone');
@@ -1507,6 +1589,39 @@ function changeUnitTotalHours(delta) {
     .updateUnitTotalHours(appState.unit.id, next);
 }
 
+// ------------------------------------
+//  タスク編集モーダル（URL埋め込み対応）
+// ------------------------------------
+
+/**
+ * 教材情報をパースするヘルパー
+ * 文字列がJSONならパースし、そうでなければそのまま名前として扱いURLは空とする
+ */
+function parseMaterialInfo(str) {
+  if (!str) return { name: '', url: '' };
+  try {
+    const obj = JSON.parse(str);
+    if (typeof obj === 'object' && obj !== null) {
+      return { name: obj.name || '', url: obj.url || '' };
+    }
+  } catch (e) {
+    // JSONでない場合はそのまま文字列として返す
+  }
+  return { name: str, url: '' };
+}
+
+/**
+ * 教材情報をシリアライズするヘルパー
+ * URLがあればJSON文字列化、なければ単なる文字列
+ */
+function serializeMaterialInfo(name, url) {
+  if (!name && !url) return '';
+  if (url && url.trim() !== '') {
+    return JSON.stringify({ name: name, url: url.trim() });
+  }
+  return name;
+}
+
 function openTeacherTaskEditModal(taskId) {
   let task = {};
   let isNew = false;
@@ -1519,6 +1634,11 @@ function openTeacherTaskEditModal(taskId) {
     if (!task) return;
   }
 
+  // 教材情報のパース
+  const tb = parseMaterialInfo(task.textbook);
+  const tbTablet = parseMaterialInfo(task.tablet);
+  const tbPrint = parseMaterialInfo(task.print);
+
   Swal.fire({
     title: isNew ? '新しいタスク' : 'タスク編集',
     html: `
@@ -1529,7 +1649,7 @@ function openTeacherTaskEditModal(taskId) {
         </div>
         <div class="mb-3">
           <label class="form-label small fw-bold">説明文</label>
-          <textarea id="ed-desc" class="form-control" rows="3">${task.desc || task.description || ''}</textarea>
+          <textarea id="ed-desc" class="form-control" rows="2">${task.desc || task.description || ''}</textarea>
         </div>
         <div class="row mb-3">
           <div class="col">
@@ -1546,7 +1666,42 @@ function openTeacherTaskEditModal(taskId) {
             </select>
           </div>
         </div>
-        <div class="mb-3 form-check form-switch border p-2 rounded bg-light">
+
+        <div class="card p-2 bg-light border-0 mb-3">
+          <div class="small fw-bold text-muted mb-2"><i class="bi bi-link-45deg"></i> 学習リンク・資料</div>
+          
+          <!-- 教科書 -->
+          <div class="mb-2">
+            <label class="form-label x-small text-muted mb-0">教科書・資料</label>
+            <div class="input-group input-group-sm">
+              <span class="input-group-text"><i class="bi bi-book"></i></span>
+              <input type="text" id="ed-tb-name" class="form-control" placeholder="名称 (例: P.24)" value="${tb.name}">
+              <input type="text" id="ed-tb-url" class="form-control" placeholder="URL (任意)" value="${tb.url}">
+            </div>
+          </div>
+          
+          <!-- タブレット -->
+          <div class="mb-2">
+            <label class="form-label x-small text-muted mb-0">タブレット・アプリ</label>
+            <div class="input-group input-group-sm">
+              <span class="input-group-text"><i class="bi bi-tablet"></i></span>
+              <input type="text" id="ed-tab-name" class="form-control" placeholder="名称 (例: NHK for School)" value="${tbTablet.name}">
+              <input type="text" id="ed-tab-url" class="form-control" placeholder="URL (任意)" value="${tbTablet.url}">
+            </div>
+          </div>
+
+          <!-- プリント -->
+          <div class="mb-2">
+            <label class="form-label x-small text-muted mb-0">プリント・その他</label>
+            <div class="input-group input-group-sm">
+              <span class="input-group-text"><i class="bi bi-file-earmark-text"></i></span>
+              <input type="text" id="ed-pr-name" class="form-control" placeholder="名称 (例: ワークシート)" value="${tbPrint.name}">
+              <input type="text" id="ed-pr-url" class="form-control" placeholder="URL (任意)" value="${tbPrint.url}">
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-3 form-check form-switch border p-2 rounded bg-white">
           <input class="form-check-input ms-0 me-2" type="checkbox" id="ed-teacher" ${task.format === 'teacher' ? 'checked' : ''} style="float:none;">
           <label class="form-check-label fw-bold" for="ed-teacher">先生タスク（固定表示）にする</label>
           <div class="form-text x-small ps-1">ONにすると、指定した時数に自動的に固定表示されます。</div>
@@ -1558,13 +1713,31 @@ function openTeacherTaskEditModal(taskId) {
     showDenyButton: !isNew,
     denyButtonText: '削除',
     denyButtonColor: '#d33',
+    width: '550px',
     preConfirm: () => {
+      // 教材情報のシリアライズ
+      const tbStr = serializeMaterialInfo(
+        document.getElementById('ed-tb-name').value, 
+        document.getElementById('ed-tb-url').value
+      );
+      const tabStr = serializeMaterialInfo(
+        document.getElementById('ed-tab-name').value, 
+        document.getElementById('ed-tab-url').value
+      );
+      const prStr = serializeMaterialInfo(
+        document.getElementById('ed-pr-name').value, 
+        document.getElementById('ed-pr-url').value
+      );
+
       return {
         title: document.getElementById('ed-title').value,
         description: document.getElementById('ed-desc').value,
         estTime: parseInt(document.getElementById('ed-time').value),
         category: document.getElementById('ed-cat').value,
-        format: document.getElementById('ed-teacher').checked ? 'teacher' : 'student'
+        format: document.getElementById('ed-teacher').checked ? 'teacher' : 'student',
+        textbook: tbStr,
+        tablet: tabStr,
+        print: prStr
       };
     }
   }).then(r => {
@@ -1589,7 +1762,10 @@ function openTeacherTaskEditModal(taskId) {
                  step: '',
                  time: newData.estTime, 
                  desc: newData.description,
-                 type: 'must'
+                 type: 'must',
+                 textbook: newData.textbook,
+                 tablet: newData.tablet,
+                 print: newData.print
                };
                dataStore.masterTasks.push(newTask);
                renderTeacherDesignView(document.getElementById('t-area'));
@@ -1606,6 +1782,9 @@ function openTeacherTaskEditModal(taskId) {
         t.time = newData.estTime;
         t.category = newData.category;
         t.format = newData.format;
+        t.textbook = newData.textbook;
+        t.tablet = newData.tablet;
+        t.print = newData.print;
         
         renderTeacherDesignView(document.getElementById('t-area'));
         
@@ -2145,212 +2324,6 @@ function saveSeating() {
     .saveSeatCoordinates(coords);
 }
 
-function renderSummaryListView(container) {
-  container.className = "flex-grow-1 p-3 overflow-hidden d-flex flex-column"; 
-  
-  const students = getFilteredStudents().sort((a,b) => a.name.localeCompare(b.name));
-  
-  if (students.length === 0) {
-    container.innerHTML = `<div class="text-center p-5 text-muted">表示する生徒がいません</div>`;
-    return;
-  }
-
-  let tableRows = '';
-  students.forEach((s, index) => {
-    let pf = {};
-    if (dataStore.clsPortfolios && dataStore.clsPortfolios[s.name] && dataStore.clsPortfolios[s.name][appState.unit.id]) {
-      const rawPf = dataStore.clsPortfolios[s.name][appState.unit.id];
-      pf = (typeof rawPf === 'object') ? rawPf : { summary: rawPf, feedback: "", stamp: "" };
-    }
-    const summary = pf.summary || "";
-    const feedback = pf.feedback || "";
-    const stamp = pf.stamp || "";
-
-    const skillCounts = {};
-    SKILL_DEFINITIONS.forEach(def => skillCounts[def.id] = 0);
-    
-    if (dataStore.clsReflections && dataStore.clsReflections[s.name] && dataStore.clsReflections[s.name][appState.unit.id]) {
-      const reflections = dataStore.clsReflections[s.name][appState.unit.id];
-      Object.values(reflections).forEach(r => {
-        if (r.skills && Array.isArray(r.skills)) {
-          r.skills.forEach(sid => { if (skillCounts[sid] !== undefined) skillCounts[sid]++; });
-        }
-      });
-    }
-
-    let skillBadges = '';
-    SKILL_DEFINITIONS.forEach(def => {
-      const count = skillCounts[def.id];
-      if (count > 0) {
-        skillBadges += `<span class="skill-mini-badge bg-${def.color}" title="${def.label}: ${count}回">${def.label.charAt(0)}${count}</span>`;
-      }
-    });
-    if (!skillBadges) skillBadges = '<span class="text-muted small">-</span>';
-
-    const uniqueId = `pf-${index}`;
-
-    tableRows += `
-      <tr>
-        <td class="st-col-name text-center text-muted small align-middle">${index + 1}</td>
-        <td class="st-col-name align-middle">
-          <div class="fw-bold text-primary" style="cursor:pointer;" onclick="renderPortfolioModal('${s.name}', true)">
-            ${s.name} <i class="bi bi-box-arrow-up-right small ms-1 text-muted"></i>
-          </div>
-        </td>
-        <td class="st-col-skills align-middle">
-          <div class="skill-badge-group">${skillBadges}</div>
-        </td>
-        <td class="st-col-summary">
-          <div class="summary-text-area" id="summary-${uniqueId}" onclick="this.style.maxHeight='none'; this.style.cursor='text';" title="クリックで全文表示">
-            ${summary ? summary.replace(/\n/g, '<br>') : '<span class="summary-empty">未提出</span>'}
-          </div>
-        </td>
-        <td class="st-col-feedback align-middle">
-          <div class="stamp-select-group">
-            <label>
-              <input type="radio" name="stamp-${uniqueId}" value="check" class="stamp-input" ${stamp==='check'?'checked':''}>
-              <span class="stamp-option" title="確認">✅</span>
-            </label>
-            <label>
-              <input type="radio" name="stamp-${uniqueId}" value="good" class="stamp-input" ${stamp==='good'?'checked':''}>
-              <span class="stamp-option" title="いいね">👍</span>
-            </label>
-            <label>
-              <input type="radio" name="stamp-${uniqueId}" value="great" class="stamp-input" ${stamp==='great'?'checked':''}>
-              <span class="stamp-option" title="すばらしい">💮</span>
-            </label>
-            <label>
-              <input type="radio" name="stamp-${uniqueId}" value="support" class="stamp-input" ${stamp==='support'?'checked':''}>
-              <span class="stamp-option" title="応援">🚩</span>
-            </label>
-          </div>
-          <div class="input-group input-group-sm">
-            <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${feedback}">
-            <button id="btn-save-${uniqueId}" class="btn btn-primary" onclick="saveListFeedback('${s.name}', '${uniqueId}')">保存</button>
-          </div>
-        </td>
-      </tr>
-    `;
-  });
-
-  container.innerHTML = `
-    <div class="summary-table-container h-100">
-      <table class="summary-table">
-        <thead>
-          <tr>
-            <th class="text-center" style="width:40px;">#</th>
-            <th class="st-col-name">名前</th>
-            <th class="st-col-skills">獲得スキル</th>
-            <th class="st-col-summary">単元のまとめ</th>
-            <th class="st-col-feedback">
-              <div class="d-flex justify-content-between align-items-center">
-                <span>フィードバック</span>
-                <button id="btn-bulk-save" class="btn btn-success btn-sm rounded-pill px-3 shadow-sm" onclick="saveAllListFeedbacks()">
-                  <i class="bi bi-save me-1"></i>一括保存
-                </button>
-              </div>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tableRows}
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-function saveListFeedback(studentName, uniqueId) {
-  const comment = document.getElementById(`fb-text-${uniqueId}`).value;
-  const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
-  const stamp = stampEl ? stampEl.value : "";
-  
-  const btn = document.getElementById(`btn-save-${uniqueId}`);
-  const originalText = btn.innerHTML; 
-  
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>';
-  
-  if (!dataStore.clsPortfolios[studentName]) dataStore.clsPortfolios[studentName] = {};
-  if (!dataStore.clsPortfolios[studentName][appState.unit.id]) dataStore.clsPortfolios[studentName][appState.unit.id] = {};
-  
-  let pf = dataStore.clsPortfolios[studentName][appState.unit.id];
-  if (typeof pf !== 'object') {
-    pf = { summary: pf || "" };
-    dataStore.clsPortfolios[studentName][appState.unit.id] = pf;
-  }
-  pf.feedback = comment;
-  pf.stamp = stamp;
-
-  google.script.run
-    .withSuccessHandler(() => {
-      showToast('success', '保存しました');
-      btn.disabled = false;
-      btn.innerHTML = originalText;
-    })
-    .withFailureHandler((e) => {
-      handleError(e);
-      btn.disabled = false;
-      btn.innerHTML = originalText;
-    })
-    .savePortfolioFeedback(studentName, appState.unit.id, comment, stamp);
-}
-
-function saveAllListFeedbacks() {
-  const students = getFilteredStudents();
-  if (students.length === 0) return;
-
-  const btn = document.getElementById('btn-bulk-save');
-  const originalHtml = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>保存中...';
-
-  const feedbackList = [];
-
-  students.forEach((s, index) => {
-    const uniqueId = `pf-${index}`;
-    const commentInput = document.getElementById(`fb-text-${uniqueId}`);
-    const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
-    
-    if (commentInput) {
-      const comment = commentInput.value;
-      const stamp = stampEl ? stampEl.value : "";
-      const unitId = appState.unit.id;
-
-      if (!dataStore.clsPortfolios[s.name]) dataStore.clsPortfolios[s.name] = {};
-      if (!dataStore.clsPortfolios[s.name][unitId]) dataStore.clsPortfolios[s.name][unitId] = {};
-
-      let pf = dataStore.clsPortfolios[s.name][unitId];
-      if (typeof pf !== 'object') {
-        pf = { summary: pf || "" };
-        dataStore.clsPortfolios[s.name][unitId] = pf;
-      }
-      pf.feedback = comment;
-      pf.stamp = stamp;
-
-      feedbackList.push({
-        studentName: s.name,
-        unitId: unitId,
-        feedback: comment,
-        stamp: stamp
-      });
-    }
-  });
-
-  google.script.run
-    .withSuccessHandler(() => {
-      showToast('success', '全員分を保存しました');
-      btn.disabled = false;
-      btn.innerHTML = originalHtml;
-    })
-    .withFailureHandler((e) => {
-      handleError(e);
-      btn.disabled = false;
-      btn.innerHTML = originalHtml;
-    })
-    .saveAllPortfolios(feedbackList);
-}
-
 function confirmArchive() {
   Swal.fire({
     title: '単元アーカイブ',
@@ -2580,8 +2553,15 @@ function getStepNumber(stepStr) {
 }
 
 function renderStudentPlanning() {
-  const planContainer = document.querySelector('.plan-container'); const scrollX = planContainer ? planContainer.scrollLeft : 0;
-  const poolContainer = document.getElementById('task-pool-container'); const poolScrollY = poolContainer ? poolContainer.scrollTop : 0;
+  // スクロール位置の保存
+  // 右側の計画表エリア
+  const scrollContainer = document.getElementById('planning-scroll-view');
+  const scrollY = scrollContainer ? scrollContainer.scrollTop : 0;
+  
+  // 左側のタスクプールエリア
+  const poolContainer = document.getElementById('task-pool-container'); 
+  const poolScrollY = poolContainer ? poolContainer.scrollTop : 0;
+
   const currentTasks = getCurrentUnitTasks();
   const myTasksFiltered = dataStore.myTasks.filter(t => t.unitId === appState.unit.id);
   const allTasks = [...currentTasks, ...myTasksFiltered];
@@ -2608,45 +2588,47 @@ function renderStudentPlanning() {
     let plannedTasksHtml = '';
     const plannedIds = dataStore.studentPlan[String(i)] || [];
     let hourTotalTime = 0;
-    const addedTaskIds = new Set(); 
+    
+    // 表示用タスクリストの構築
+    let displayTasks = [];
+    
+    // A. 既存の計画にあるタスクを追加
+    plannedIds.forEach(tid => {
+      const t = allTasks.find(x => x.taskId === tid);
+      if (t) displayTasks.push(t);
+    });
 
-    // 1. 先生タスク（固定）
-    allTasks.forEach(t => {
-      if (t.format === 'teacher' && getStepNumber(t.step) === i) {
-        hourTotalTime += t.time;
-        const borderClass = getCategoryColorClass(t.category);
-        plannedTasksHtml += `<div class="card p-2 mb-2 shadow-sm ${borderClass}" style="opacity:0.9;" onclick="openTaskDetailModal('${t.taskId}')">
+    // B. 計画に含まれていない先生タスク（必須固定）があれば自動挿入（先頭へ）
+    const fixedTasks = allTasks.filter(t => t.format === 'teacher' && getStepNumber(t.step) === i);
+    fixedTasks.forEach(ft => {
+      if (!displayTasks.some(t => t.taskId === ft.taskId)) {
+         displayTasks.unshift(ft);
+      }
+    });
+
+    // C. HTML生成（一括処理）
+    displayTasks.forEach(t => {
+      hourTotalTime += t.time;
+      const borderClass = getCategoryColorClass(t.category);
+      const isTeacher = t.format === 'teacher';
+      
+      // 共通パーツ
+      const badge = isTeacher ? `<span class="badge bg-info text-white me-1" style="font-size:0.6em">固定</span>` : '';
+      const deleteBtn = isTeacher ? '' : `<i class="bi bi-x text-danger" style="cursor:pointer" onclick="event.stopPropagation(); removeFromPlan('${String(i)}', '${t.taskId}')"></i>`;
+      const bgStyle = t.category === 'マイタスク' ? 'background-color:#fbf5ff;' : (isTeacher ? 'opacity:0.9;' : '');
+      
+      // 修正点: 先生タスクにも 'task-draggable' クラスを付与し、ドラッグ可能にする
+      plannedTasksHtml += `
+        <div class="card p-2 mb-2 shadow-sm task-draggable ${borderClass}" style="${bgStyle}" data-id="${t.taskId}" onclick="openTaskDetailModal('${t.taskId}')">
           <div class="d-flex justify-content-between align-items-center">
-            <span class="small fw-bold text-truncate"><span class="badge bg-info text-white me-1" style="font-size:0.6em">固定</span>${t.title}</span>
+            <span class="small fw-bold text-truncate">${badge}${t.title}</span>
+            ${deleteBtn}
           </div>
           <div class="d-flex justify-content-between align-items-center mt-1">
             <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${t.category}</span>
             <span class="x-small text-muted">${t.time}分</span>
           </div>
         </div>`;
-        addedTaskIds.add(t.taskId);
-      }
-    });
-
-    // 2. 生徒タスク
-    plannedIds.forEach(tid => {
-      if (addedTaskIds.has(tid)) return;
-
-      const t = allTasks.find(x => x.taskId === tid);
-      if (t) {
-        hourTotalTime += t.time;
-        const borderClass = getCategoryColorClass(t.category);
-        plannedTasksHtml += `<div class="card p-2 mb-2 shadow-sm task-draggable ${borderClass}" style="${t.category==='マイタスク'?'background-color:#fbf5ff;':''}" data-id="${t.taskId}" onclick="openTaskDetailModal('${t.taskId}')">
-            <div class="d-flex justify-content-between">
-              <span class="small fw-bold text-truncate">${t.title}</span>
-              <i class="bi bi-x text-danger" style="cursor:pointer" onclick="event.stopPropagation(); removeFromPlan('${String(i)}', '${tid}')"></i>
-            </div>
-            <div class="d-flex justify-content-between align-items-center mt-1">
-              <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${t.category}</span>
-              <span class="x-small text-muted">${t.time}分</span>
-            </div>
-          </div>`;
-      }
     });
 
     const timeRatio = Math.min(hourTotalTime / CONSTANTS.UNIT_TIME, 1) * 100;
@@ -2686,7 +2668,8 @@ function renderStudentPlanning() {
           <div id="task-pool-container" class="flex-grow-1 overflow-auto p-2"><div id="task-pool">${taskPoolHtml}</div></div>
         </div>
         <!-- 右側：計画表（縦スクロール） -->
-        <div class="col-8 h-100 overflow-auto">
+        <!-- ID 'planning-scroll-view' を追加してスクロール位置を管理 -->
+        <div id="planning-scroll-view" class="col-8 h-100 overflow-auto">
           <div class="plan-container-v h-100 pt-2">
             ${hoursHtml}
           </div>
@@ -2694,7 +2677,12 @@ function renderStudentPlanning() {
       </div>
     </div>`;
 
-  const newPoolContainer = document.getElementById('task-pool-container'); if (newPoolContainer) newPoolContainer.scrollTop = poolScrollY;
+  // スクロール位置の復元
+  const newPoolContainer = document.getElementById('task-pool-container'); 
+  if (newPoolContainer) newPoolContainer.scrollTop = poolScrollY;
+
+  const newScrollContainer = document.getElementById('planning-scroll-view');
+  if (newScrollContainer) newScrollContainer.scrollTop = scrollY;
   
   new Sortable(document.getElementById('task-pool'), { group: { name: 'shared', pull: 'clone', put: false }, sort: false, animation: 150 });
   
@@ -2705,10 +2693,21 @@ function renderStudentPlanning() {
       animation: 150,
       draggable: ".task-draggable", 
       onAdd: function (evt) {
-        const tid = evt.item.getAttribute('data-id');
-        const h = String(evt.to.getAttribute('data-hour'));
-        addToPlan(h, tid);
-        evt.item.remove();
+        const hour = String(evt.to.getAttribute('data-hour'));
+        const newOrder = this.toArray(); 
+        updatePlanByOrder(hour, newOrder);
+        
+        setTimeout(() => renderStudentPlanning(), 0);
+      },
+      onUpdate: function (evt) {
+        const hour = String(evt.to.getAttribute('data-hour'));
+        const newOrder = this.toArray();
+        updatePlanByOrder(hour, newOrder);
+      },
+      onRemove: function (evt) {
+        const hour = String(evt.from.getAttribute('data-hour'));
+        const newOrder = this.toArray(); 
+        updatePlanByOrder(hour, newOrder);
       }
     });
   });
@@ -2740,7 +2739,49 @@ function removeFromPlan(hour, taskId) {
 function openImportModal() { Swal.fire({ title: 'JSONインポート', html: '<textarea id="ji" class="form-control" rows="10"></textarea>', showCancelButton: true, confirmButtonText: '実行' }).then(r => { if (r.isConfirmed) { showLoading(); google.script.run.withSuccessHandler(d => { hideLoading(); Swal.fire('完了', d.count + '件', 'success'); loadMainData(); }).importUnitJson(document.getElementById('ji').value); } }); }
 function showStudentTaskDetail(name, tid) { const t = dataStore.masterTasks.find(x => x.taskId === tid); const p = (dataStore.clsProgress[name] && dataStore.clsProgress[name][tid]) || {}; Swal.fire({ title: `${name} さんの状況`, html: `<div class="text-start"><h6 class="fw-bold text-primary">${t.title}</h6><div class="mb-3"><span class="badge bg-secondary me-1">状態: ${p.status||'未'}</span></div><div class="p-3 bg-light rounded mb-3 small">${p.reflection||'メモなし'}</div><hr><div class="d-flex justify-content-center gap-2"><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','check')">✅</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','good')">👍</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','great')">💮</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','support')">🚩</button></div></div>`, showConfirmButton: false, showCloseButton: true }); }
 function sendStamp(name, tid, stamp) { if (!dataStore.clsFeedback[name]) dataStore.clsFeedback[name] = {}; dataStore.clsFeedback[name][tid] = stamp; renderTeacherDashboardContent(); showToast('success', 'スタンプ送信'); google.script.run.sendFeedback(name, tid, stamp, appState.view.teacherClassId !== 'All' ? appState.view.teacherClassId : ''); }
-function showTeacherTaskDetailSimple(tid) { const t = dataStore.masterTasks.find(x => x.taskId === tid); if (!t) return; Swal.fire({ title: t.title, html: `<div class="text-start"><p class="text-muted border p-3 rounded bg-light mb-0">${t.desc || '説明なし'}</p><div class="mt-2 text-end small text-muted">時間: ${t.time}分</div></div>`, showConfirmButton: false, showCloseButton: true }); }
+
+/**
+ * [Update] リンク表示に対応した詳細モーダル（先生用）
+ */
+function showTeacherTaskDetailSimple(tid) {
+  const t = dataStore.masterTasks.find(x => x.taskId === tid);
+  if (!t) return;
+
+  // 教材リンクのHTML生成
+  const materials = [
+    { type: 'textbook', label: '教科書・資料', icon: 'bi-book', data: parseMaterialInfo(t.textbook) },
+    { type: 'tablet', label: 'タブレット・アプリ', icon: 'bi-tablet', data: parseMaterialInfo(t.tablet) },
+    { type: 'print', label: 'プリント・その他', icon: 'bi-file-earmark-text', data: parseMaterialInfo(t.print) }
+  ];
+
+  let materialHtml = '';
+  materials.forEach(m => {
+    if (m.data.name) {
+      if (m.data.url) {
+        // URLがある場合はボタン
+        materialHtml += `<a href="${m.data.url}" target="_blank" class="btn btn-outline-primary btn-sm w-100 mb-2 text-start text-truncate"><i class="bi ${m.icon} me-2"></i>${m.data.name}</a>`;
+      } else {
+        // URLがない場合はバッジ
+        materialHtml += `<div class="mb-2 text-truncate"><span class="badge bg-light text-dark border me-2"><i class="bi ${m.icon}"></i> ${m.label}</span><span class="small">${m.data.name}</span></div>`;
+      }
+    }
+  });
+
+  Swal.fire({
+    title: t.title,
+    html: `
+      <div class="text-start">
+        <p class="text-muted border p-3 rounded bg-light mb-3">${t.desc || '説明なし'}</p>
+        
+        ${materialHtml ? '<div class="mb-3 border-top pt-2"><div class="small fw-bold text-muted mb-2">学習リソース</div>' + materialHtml + '</div>' : ''}
+        
+        <div class="text-end small text-muted">時間: ${t.time}分</div>
+      </div>
+    `,
+    showConfirmButton: false,
+    showCloseButton: true
+  });
+}
 
 function openMyTaskModal() { 
   Swal.fire({ 
@@ -2787,7 +2828,64 @@ function openMyTaskModal() {
   }); 
 }
 
-function openTaskDetailModal(taskId) { const allTasks = [...dataStore.masterTasks, ...dataStore.myTasks]; const t = allTasks.find(x => x.taskId === taskId); if (!t || t.isLocked) return; const mem = (dataStore.studentProgress[taskId] || {}).reflection || ""; Swal.fire({ title: t.title, html: `<div class="text-start"><p class="small bg-light p-2 rounded">${t.desc || ""}</p><label class="form-label fw-bold small">メモ</label><textarea id="ref-txt" class="form-control" rows="3">${mem}</textarea></div>`, showCancelButton: true, confirmButtonText: '保存' }).then(r => { if (r.isConfirmed) { const txt = document.getElementById('ref-txt').value; if (txt !== mem) { if (!dataStore.studentProgress[taskId]) dataStore.studentProgress[taskId] = {}; dataStore.studentProgress[taskId].reflection = txt; const curStatus = dataStore.studentProgress[taskId].status || '未着手'; google.script.run.updateStatus(appState.user.name, t.taskId, t.title, curStatus, '通常', txt, appState.user.classId, appState.unit.id); showToast('success', '保存完了'); renderStudentView(); } } }); }
+/**
+ * [Update] リンク表示に対応した詳細モーダル（生徒用）
+ */
+function openTaskDetailModal(taskId) {
+  const allTasks = [...dataStore.masterTasks, ...dataStore.myTasks];
+  const t = allTasks.find(x => x.taskId === taskId);
+  if (!t || t.isLocked) return;
+
+  const mem = (dataStore.studentProgress[taskId] || {}).reflection || "";
+
+  // 教材リンクのHTML生成
+  const materials = [
+    { type: 'textbook', label: '教科書・資料', icon: 'bi-book', data: parseMaterialInfo(t.textbook) },
+    { type: 'tablet', label: 'タブレット・アプリ', icon: 'bi-tablet', data: parseMaterialInfo(t.tablet) },
+    { type: 'print', label: 'プリント・その他', icon: 'bi-file-earmark-text', data: parseMaterialInfo(t.print) }
+  ];
+
+  let materialHtml = '';
+  materials.forEach(m => {
+    if (m.data.name) {
+      if (m.data.url) {
+        // URLがある場合はボタン
+        materialHtml += `<a href="${m.data.url}" target="_blank" class="btn btn-outline-primary btn-sm w-100 mb-2 text-start text-truncate fw-bold"><i class="bi ${m.icon} me-2"></i>${m.data.name}</a>`;
+      } else {
+        // URLがない場合はバッジ
+        materialHtml += `<div class="mb-2 text-truncate"><span class="badge bg-light text-dark border me-2"><i class="bi ${m.icon}"></i> ${m.label}</span><span class="small">${m.data.name}</span></div>`;
+      }
+    }
+  });
+
+  Swal.fire({
+    title: t.title,
+    html: `
+      <div class="text-start">
+        <p class="small bg-light p-2 rounded mb-3">${t.desc || ""}</p>
+        
+        ${materialHtml ? '<div class="mb-3 border p-2 rounded bg-white"><div class="small fw-bold text-primary mb-2"><i class="bi bi-link-45deg"></i> 学習リンク</div>' + materialHtml + '</div>' : ''}
+
+        <label class="form-label fw-bold small">メモ</label>
+        <textarea id="ref-txt" class="form-control" rows="3">${mem}</textarea>
+      </div>
+    `,
+    showCancelButton: true,
+    confirmButtonText: '保存'
+  }).then(r => {
+    if (r.isConfirmed) {
+      const txt = document.getElementById('ref-txt').value;
+      if (txt !== mem) {
+        if (!dataStore.studentProgress[taskId]) dataStore.studentProgress[taskId] = {};
+        dataStore.studentProgress[taskId].reflection = txt;
+        const curStatus = dataStore.studentProgress[taskId].status || '未着手';
+        google.script.run.updateStatus(appState.user.name, t.taskId, t.title, curStatus, '通常', txt, appState.user.classId, appState.unit.id);
+        showToast('success', '保存完了');
+        renderStudentView();
+      }
+    }
+  });
+}
 
 /**
  * 単元詳細情報（めあて・概要）を表示するモーダル
