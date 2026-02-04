@@ -1,8 +1,8 @@
 <script>
 /**
- * みらいコンパス Ver. 1.1 - クライアントサイドロジック
+ * みらいコンパス Ver. 1.2 - クライアントサイドロジック
  * * 画面の描画、ボタン操作、サーバーとの通信などを制御します。
- * * Update: タスクへの外部リンク埋め込み機能を追加
+ * * Update: みらいパスポート連携機能（Launcher）を追加
  */
 
 // ==========================================
@@ -123,7 +123,8 @@ let appState = {
   sound: { enabled: true, unlocked: false, prevSosCount: 0 },
   unit: { id: "", title: "", totalHours: 8, currentHour: 1 },
   unitList: [],
-  schedules: []
+  schedules: [],
+  passportUrl: "" // [追加] みらいパスポート連携URL
 };
 
 // データストア
@@ -195,6 +196,13 @@ function loadMainData() {
   const container = document.getElementById('app-container');
   if (!container.hasChildNodes() || container.innerHTML === '') showLoading();
   
+  // 連携用URLの取得（並行処理）
+  google.script.run
+    .withSuccessHandler(url => { appState.passportUrl = url; })
+    .withFailureHandler(e => console.warn('Passport URL Load Failed', e))
+    .getPassportUrl();
+
+  // メインデータの取得
   google.script.run
     .withSuccessHandler(res => {
       if (res.success) {
@@ -431,7 +439,7 @@ function renderApp() {
     if (appState.mode === 'teacher') {
       mainEl.classList.add('teacher-mode');
       settingsBtn.classList.remove('d-none'); 
-      exitBtn.classList.remove('d-none');     
+      exitBtn.classList.remove('d-none');      
       renderTeacherView();
     } else {
       mainEl.classList.remove('teacher-mode');
@@ -1059,10 +1067,10 @@ function renderTeacherDashboardContent() {
   if (mainEl && appContainer) {
     if (appState.view.teacher === 'design') {
       // 設計モード: 画面全体を固定し、内部スクロールのみ有効化
-      mainEl.style.overflow = 'hidden';      
-      mainEl.style.display = 'flex';         
+      mainEl.style.overflow = 'hidden';       
+      mainEl.style.display = 'flex';          
       mainEl.style.flexDirection = 'column';
-      mainEl.style.paddingBottom = '0';      // フッター余白削除
+      mainEl.style.paddingBottom = '0';       // フッター余白削除
       
       // コンテナを画面一杯に広げる
       appContainer.classList.add('h-100');
@@ -2358,7 +2366,50 @@ function showToast(icon, title) { Swal.fire({ toast: true, position: 'top-end', 
 function handleError(err) { hideLoading(); Swal.fire({ title: 'システムエラー', text: err.message || err.toString(), icon: 'error' }); }
 function showLoading() { const e = document.getElementById('loading'); if (e) e.classList.remove('d-none'); }
 function hideLoading() { const e = document.getElementById('loading'); if (e) e.classList.add('d-none'); }
-function toggleSettings() { if (document.getElementById('settingsModal')) { new bootstrap.Modal(document.getElementById('settingsModal')).show(); } }
+
+// [Update] 設定モーダルの表示（URL初期値セット）
+function toggleSettings() { 
+  if (document.getElementById('settingsModal')) { 
+    // Passport連携URLをセット
+    const urlInput = document.getElementById('passportUrlInput');
+    if (urlInput) urlInput.value = appState.passportUrl || "";
+    
+    new bootstrap.Modal(document.getElementById('settingsModal')).show(); 
+  } 
+}
+
+// [New] 設定保存処理（Passport URL含む）
+function App() {} // Namespace placeholder if needed
+App.saveSettings = function() {
+  const url = document.getElementById('passportUrlInput').value.trim();
+  
+  // URLバリデーション（簡易）
+  if (url && !url.startsWith('http')) {
+    Swal.showValidationMessage('正しいURLを入力してください');
+    return;
+  }
+
+  const btn = document.querySelector('#settingsModal .btn-primary'); // 保存ボタン
+  const originalText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>保存中...';
+
+  google.script.run
+    .withSuccessHandler(() => {
+      appState.passportUrl = url;
+      showToast('success', '設定を保存しました');
+      btn.disabled = false;
+      btn.innerHTML = originalText;
+      bootstrap.Modal.getInstance(document.getElementById('settingsModal')).hide();
+    })
+    .withFailureHandler((e) => {
+      handleError(e);
+      btn.disabled = false;
+      btn.innerHTML = originalText;
+    })
+    .savePassportUrl(url);
+};
+
 function unlockAudio() { const audio = document.getElementById('sos-chime'); if (audio && !appState.sound.unlocked) { audio.volume = 0; audio.play().then(() => { audio.pause(); audio.currentTime = 0; audio.volume = 0.5; appState.sound.unlocked = true; }).catch(e => {}); } }
 function checkSosAndPlaySound() { const currentSosCount = dataStore.liveStatus.filter(d => d.mode === 'たすけて').length; if (currentSosCount > appState.sound.prevSosCount) { const audio = document.getElementById('sos-chime'); if (audio) audio.play().catch(e => {}); } appState.sound.prevSosCount = currentSosCount; }
 
@@ -2509,13 +2560,28 @@ function createStudentTaskCard(t) {
   const borderClass = getCategoryColorClass(t.category);
   
   let stampHtml = stamp ? `<div class="stamp-badge animate__animated animate__bounceIn">${{'check':'✅','good':'👍','great':'💮','support':'🚩'}[stamp]||''}</div>` : '';
+  
+  // [修正点] Passport起動ボタンの生成
+  let passportBtn = '';
+  // 先生タスク・マイタスク以外で、かつPassport連携URLが設定されている場合に表示
+  if (t.format !== 'teacher' && t.category !== 'マイタスク' && appState.passportUrl) {
+    passportBtn = `<button class="btn btn-primary rounded-pill px-3 btn-sm fw-bold me-1 shadow-sm" onclick="event.stopPropagation(); launchPassport('${t.taskId}')" title="みらいパスポートで学習する"><i class="bi bi-rocket-takeoff-fill"></i></button>`;
+  }
+
   let actionBtn = '';
   if (isDone) { actionBtn = `<button class="btn btn-secondary rounded-pill px-3 btn-sm fw-bold" disabled>完了</button>`; } 
   else {
     const doingBtn = isDoing ? 'btn-warning text-dark' : 'btn-outline-warning text-dark';
     let buttons = `<button class="btn btn-outline-success rounded-pill px-3 btn-sm fw-bold" onclick="event.stopPropagation(); submitTaskProgress('${t.taskId}','完了',this)">できた</button>`;
-    if (t.format !== 'teacher') buttons = `<button class="btn ${doingBtn} rounded-pill px-3 btn-sm fw-bold me-1" onclick="event.stopPropagation(); submitTaskProgress('${t.taskId}','途中',this)">途中</button>` + buttons;
-    actionBtn = buttons;
+    
+    // [修正点] 先生タスクでなければ「途中」ボタンを表示し、その左にPassportボタンを配置
+    if (t.format !== 'teacher') {
+       buttons = `<button class="btn ${doingBtn} rounded-pill px-3 btn-sm fw-bold me-1" onclick="event.stopPropagation(); submitTaskProgress('${t.taskId}','途中',this)">途中</button>` + buttons;
+       // Passportボタンを結合
+       actionBtn = passportBtn + buttons;
+    } else {
+       actionBtn = buttons;
+    }
   }
   if (t.format === 'teacher') actionBtn = `<span class="badge bg-info text-white me-2">先生</span>` + actionBtn;
   return `
@@ -2829,7 +2895,7 @@ function openMyTaskModal() {
 }
 
 /**
- * [Update] リンク表示に対応した詳細モーダル（生徒用）
+ * [Update] リンク表示 & Passportランチャーに対応した詳細モーダル（生徒用）
  */
 function openTaskDetailModal(taskId) {
   const allTasks = [...dataStore.masterTasks, ...dataStore.myTasks];
@@ -2858,6 +2924,20 @@ function openTaskDetailModal(taskId) {
     }
   });
 
+  // [New] みらいパスポート起動ボタンの生成
+  let passportLauncherHtml = '';
+  // 先生タスク(format:teacher)以外、かつマイタスク以外で表示
+  if (t.format !== 'teacher' && t.category !== 'マイタスク') {
+    passportLauncherHtml = `
+      <div class="mt-4 pt-3 border-top text-center">
+        <button class="btn btn-outline-primary rounded-pill w-100 fw-bold shadow-sm" onclick="launchPassport('${taskId}')">
+          <i class="bi bi-rocket-takeoff-fill me-2"></i>みらいパスポートで学習する
+        </button>
+        <div class="x-small text-muted mt-1">※別タブでワークシートが開きます</div>
+      </div>
+    `;
+  }
+
   Swal.fire({
     title: t.title,
     html: `
@@ -2868,6 +2948,8 @@ function openTaskDetailModal(taskId) {
 
         <label class="form-label fw-bold small">メモ</label>
         <textarea id="ref-txt" class="form-control" rows="3">${mem}</textarea>
+        
+        ${passportLauncherHtml}
       </div>
     `,
     showCancelButton: true,
@@ -2885,6 +2967,30 @@ function openTaskDetailModal(taskId) {
       }
     }
   });
+}
+
+// [New] みらいパスポート起動ロジック
+function launchPassport(taskId) {
+  if (!appState.passportUrl) {
+    Swal.fire({
+      icon: 'warning',
+      title: '連携未設定',
+      text: '「みらいパスポート」のURLが設定されていません。先生に確認してください。'
+    });
+    return;
+  }
+
+  // 連携用URLの生成 (自動ログイン用パラメータ付き)
+  // 学年やクラスIDは必要なら追加可能だが、現状はPassport側の自動生成に任せるため最小限に
+  const params = new URLSearchParams({
+    mode: 'student',
+    taskId: taskId,
+    studentId: appState.user.name, // 簡易的に名前をIDとして使用 (運用上ユニークである前提)
+    studentName: appState.user.name
+  });
+
+  const url = `${appState.passportUrl}?${params.toString()}`;
+  window.open(url, '_blank');
 }
 
 /**
@@ -2999,12 +3105,12 @@ function openRosterManagerModal() {
           <textarea id="roster-names" class="form-control" rows="10" placeholder="相川 健太&#13;&#10;飯田 美咲&#13;&#10;..."></textarea>
         </div>
         <div class="d-flex justify-content-between align-items-center">
-           <button class="btn btn-outline-secondary btn-sm" onclick="loadRosterToTextarea()">
-             <i class="bi bi-arrow-clockwise me-1"></i>既存データを読込
-           </button>
-           <button class="btn btn-success rounded-pill px-4" onclick="submitSaveRoster()">
-             <i class="bi bi-save me-1"></i>保存する
-           </button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="loadRosterToTextarea()">
+              <i class="bi bi-arrow-clockwise me-1"></i>既存データを読込
+            </button>
+            <button class="btn btn-success rounded-pill px-4" onclick="submitSaveRoster()">
+              <i class="bi bi-save me-1"></i>保存する
+            </button>
         </div>
       </div>
     `,
