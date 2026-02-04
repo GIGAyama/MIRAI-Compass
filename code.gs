@@ -936,3 +936,22 @@ function saveCustomAiPrompt(text) {
     return createErrorResponse(e);
   }
 }
+
+// ==========================================
+//  6. Passport Integration (New)
+// ==========================================
+
+/**
+ * [追加] スクリプトプロパティからPassportのURLを取得
+ */
+function getPassportUrl() {
+  return PROPERTIES.getProperty('PASSPORT_WEB_APP_URL') || "";
+}
+
+/**
+ * [追加] フロントエンドからURLを受け取って保存
+ */
+function savePassportUrl(url) {
+  PROPERTIES.setProperty('PASSPORT_WEB_APP_URL', url);
+  return true;
+}
