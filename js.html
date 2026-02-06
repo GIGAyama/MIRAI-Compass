@@ -269,27 +269,39 @@ function startInitialization() {
     .initSystem();
 }
 
+/**
+ * [変更] 自動更新タイマー（軽量ポーリング版）
+ * サーバー負荷を下げつつ、更新頻度を10秒に短縮
+ */
 function startAutoRefresh() {
   if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  
+  // 10秒間隔で最新ステータスだけを取りに行く
   autoRefreshTimer = setInterval(() => {
+    // タブが裏にいる時は通信しない（省エネ）
+    if (document.hidden) return;
+
     google.script.run
       .withSuccessHandler(res => {
-        if (res.success) {
-          updateDataStore(res.json);
-          if (appState.mode === 'teacher' && document.getElementById('t-area')) {
-            if (appState.view.teacher !== 'seating' || !isDraggingSeat) {
-              renderTeacherDashboardContent();
-            }
+        if (res.success && res.live) {
+          // データを更新
+          dataStore.liveStatus = res.live;
+          
+          // 先生モードなら、画面全体を再描画せずに見た目だけ更新（チラつき防止）
+          if (appState.mode === 'teacher') {
+            updateLiveViews();
             checkSosAndPlaySound();
-          } 
+          }
+          // 生徒モードなら通知チェックのみ
           else if (appState.mode === 'student') {
             checkScheduleAndNotify();
           }
         }
       })
-      .withFailureHandler(e => console.error("AutoRefresh Failed", e))
-      .getData();
-  }, CONSTANTS.REFRESH_INTERVAL);
+      .withFailureHandler(e => console.error("Polling Error", e))
+      .getLiveStatusSnapshot(); // code.gsに追加した軽量関数を使用
+      
+  }, 10000);
 }
 
 function updateDataStore(jsonStr) {
@@ -1113,6 +1125,71 @@ function renderTeacherDashboardContent() {
   }
   
   if(appState.view.teacher !== 'design' && scrollPos > 0) el.scrollTop = scrollPos;
+}
+
+/**
+ * [新規] 画面をチラつかせずにステータスだけを高速更新する関数
+ */
+function updateLiveViews() {
+  // 現在表示中の生徒リストを取得
+  const students = getFilteredStudents();
+  
+  // 1. LIVEビュー (カード) の更新
+  if (appState.view.teacher === 'cards') {
+    students.forEach(s => {
+      const card = document.getElementById(`live-card-${s.name}`);
+      if (card) {
+        // モード判定
+        const isSos = isSosMode(s.mode);
+        const isFocus = isFocusMode(s.mode);
+        const isOtherUnit = s.currentUnitId && s.currentUnitId !== appState.unit.id;
+        
+        // クラスの付け替え（SOSなら赤く点滅）
+        card.className = `card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}`;
+        card.style.opacity = isOtherUnit ? '0.5' : '1';
+        
+        // アイコンの色
+        const icon = card.querySelector('.bi-person-circle');
+        if (icon) {
+          icon.className = `bi bi-person-circle fs-1 my-2 ${isSos ? 'text-danger' : (isFocus ? 'text-info' : 'text-secondary')}`;
+        }
+        
+        // タスク名とバッジ
+        const taskEl = card.querySelector('.task-text');
+        if (taskEl) taskEl.innerHTML = isOtherUnit ? '<span class="small text-secondary">他単元を学習中</span>' : (s.task || '-');
+        
+        const badgeEl = card.querySelector('.mode-badge');
+        if (badgeEl) badgeEl.textContent = s.mode || '通常';
+      }
+    });
+  }
+  
+  // 2. 座席ビュー (Seating) の更新
+  else if (appState.view.teacher === 'seating' && !isDraggingSeat) {
+    const canvas = document.getElementById('seating-canvas');
+    if (canvas) {
+      students.forEach(s => {
+        // data-name属性を使ってカードを探す
+        const card = canvas.querySelector(`.seat-card[data-name="${s.name}"]`);
+        if (card) {
+          const isSos = isSosMode(s.mode);
+          const isFocus = isFocusMode(s.mode);
+          
+          // クラス更新
+          if (isSos) card.classList.add('sos-alert', 'bg-light-danger');
+          else card.classList.remove('sos-alert', 'bg-light-danger');
+          
+          // アイコン更新
+          const icon = card.querySelector('.bi-person-circle');
+          if (icon) icon.className = `bi bi-person-circle fs-3 ${isSos ? 'text-danger' : (isFocus ? 'text-info' : 'text-secondary')}`;
+          
+          // テキスト更新
+          const taskDiv = card.querySelector('.x-small');
+          if(taskDiv) taskDiv.textContent = s.task || '-';
+        }
+      });
+    }
+  }
 }
 
 // ----------------------------------------------------
@@ -2223,6 +2300,10 @@ function getFilteredStudents() {
   return dataStore.liveStatus.filter(s => s.classId === appState.view.teacherClassId);
 }
 
+/**
+ * [変更] 先生用: LIVEモニタリング画面の描画（SOS対応版）
+ * IDを付与して部分更新を可能にしました
+ */
 function renderLiveCards(container, students) {
   container.className = "flex-grow-1 overflow-auto"; 
   if (students.length === 0) {
@@ -2232,16 +2313,17 @@ function renderLiveCards(container, students) {
       const isOtherUnit = s.currentUnitId && s.currentUnitId !== appState.unit.id;
       const opacity = isOtherUnit ? '0.5' : '1';
       const taskDisplay = isOtherUnit ? '<span class="small text-secondary">他単元を学習中</span>' : (s.task || '-');
-      // [Update] 英語/日本語モード両対応
       const isSos = isSosMode(s.mode);
       const isFocus = isFocusMode(s.mode);
+      
+      // 更新用ID (live-card-名前) を追加
       return `
       <div class="col">
-        <div class="card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert' : ''}" style="opacity: ${opacity}">
+        <div id="live-card-${s.name}" class="card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}" style="opacity: ${opacity}">
           <div class="fw-bold text-truncate mb-2">${s.name}</div>
           <i class="bi bi-person-circle fs-1 my-2 ${isSos ? 'text-danger' : (isFocus ? 'text-info' : 'text-secondary')}"></i>
-          <div class="small text-muted text-truncate">${taskDisplay}</div>
-          <div class="badge bg-light text-muted mt-1 fw-normal">${s.mode}</div>
+          <div class="small text-muted text-truncate task-text">${taskDisplay}</div>
+          <div class="badge bg-light text-muted mt-1 fw-normal mode-badge">${s.mode || '通常'}</div>
         </div>
       </div>`;
     }).join('')}</div>`;
