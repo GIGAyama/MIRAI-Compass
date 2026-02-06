@@ -135,9 +135,16 @@ footer {
   pointer-events: none;
   filter: grayscale(0.8);
 }
+
+/* ステータスアラートスタイル */
 .sos-alert {
   border: 2px solid var(--color-danger) !important;
+  background-color: rgba(234, 67, 53, 0.05); /* 薄い赤背景 */
   animation: pulse 1.5s infinite;
+}
+.focus-alert {
+  border: 2px solid var(--color-info) !important;
+  background-color: rgba(66, 133, 244, 0.05); /* 薄い青背景 */
 }
 
 /* タブ */
@@ -217,6 +224,7 @@ footer {
 .heatmap-done { background-color: var(--color-success) !important; color: #fff; }
 .heatmap-doing { background-color: var(--color-warning) !important; color: #000; }
 .heatmap-sos { background-color: var(--color-danger) !important; color: #fff; animation: pulse 2s infinite; }
+.heatmap-focus { background-color: var(--color-info) !important; color: #fff; }
 
 /* 計画作成画面（縦スクロール版） */
 .plan-drop-zone-v {
