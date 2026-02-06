@@ -1,7 +1,8 @@
 /**
- * 🧭 みらいコンパス Ver. 1.0 - サーバーサイドプログラム
+ * 🧭 みらいコンパス Ver. 1.3 - サーバーサイドプログラム
  * * このファイルは、Googleスプレッドシート（データベース）とのやり取りを担当します。
  * データの保存、読み出し、初期設定などの機能が含まれています。
+ * Update: Phase 3 完全DB連携（HTTP廃止）対応
  */
 
 // ==========================================
@@ -143,6 +144,10 @@ function getData() {
     const ss = SpreadsheetApp.openById(ssId);
     checkAndFixSheets(ss);
 
+    // [New] 共有DB連携: パスポートのデータを読み込んでマージする
+    // ここでパスポートDBを開き、'StudentStatus' シートなどを読み取って liveData に反映させる処理を入れる予定
+    // Step 4で実装します。
+    
     const unitData = fetchSheetData(ss, DB_SCHEMA.UnitMaster.name).map(r => ({
       unitId: String(r[0]), taskId: String(r[1]), type: String(r[2]), title: String(r[3]),
       desc: String(r[4]), time: Number(r[5]), category: String(r[7]), step: String(r[8] || ''),
@@ -942,16 +947,118 @@ function saveCustomAiPrompt(text) {
 // ==========================================
 
 /**
- * [追加] スクリプトプロパティからPassportのURLを取得
+ * [追加] スクリプトプロパティからPassportのDB IDを取得
+ */
+function getPassportDbId() {
+  return PROPERTIES.getProperty('PASSPORT_DB_ID') || "";
+}
+
+/**
+ * [追加] スクリプトプロパティからPassportのWebアプリURLを取得
  */
 function getPassportUrl() {
   return PROPERTIES.getProperty('PASSPORT_WEB_APP_URL') || "";
 }
 
 /**
- * [追加] フロントエンドからURLを受け取って保存
+ * [追加] フロントエンドからDB IDとURLを受け取って保存
+ * ※URLは「開く用」、IDは「書き込む用」として保存
  */
-function savePassportUrl(url) {
+function savePassportConfig(dbId, url) {
+  PROPERTIES.setProperty('PASSPORT_DB_ID', dbId);
   PROPERTIES.setProperty('PASSPORT_WEB_APP_URL', url);
   return true;
+}
+
+// ==========================================
+//  7. Passport Integration (Direct DB Write)
+// ==========================================
+
+/**
+ * 代替案: HTTP通信を使わず、スプレッドシートに直接書き込んで連携する
+ */
+function sendUnitPlanToPassport_DirectDB(unitId) {
+  try {
+    // 相手の「スプレッドシートID」と「WebアプリURL」を取得
+    const passportSsId = PROPERTIES.getProperty('PASSPORT_DB_ID');
+    const passportUrl = PROPERTIES.getProperty('PASSPORT_WEB_APP_URL'); 
+    
+    if (!passportSsId || !passportUrl) throw new Error("みらいパスポートの連携設定（ID/URL）が完了していません。");
+
+    // ------------------------------------------
+    // 1. データの準備（既存コードと同じロジック）
+    // ------------------------------------------
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
+    const data = sheet.getDataRange().getValues();
+    
+    let unitInfo = { unitName: "", grade: "" };
+    const tasks = [];
+    
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === String(unitId)) {
+        if (!unitInfo.unitName) {
+           const infoJson = safeJsonParse(data[i][14]);
+           unitInfo.unitName = infoJson.unitName || infoJson.title || "無題の単元";
+           unitInfo.grade = infoJson.grade || "";
+        }
+        tasks.push({
+          taskId: String(data[i][1]),
+          title: String(data[i][3]),
+          description: String(data[i][4])
+        });
+      }
+    }
+    
+    if (tasks.length === 0) throw new Error("対象の単元データが見つかりません。");
+
+    const importData = {
+      unitName: unitInfo.unitName,
+      grade: unitInfo.grade,
+      tasks: tasks,
+      timestamp: new Date().toISOString()
+    };
+
+    // ------------------------------------------
+    // 2. 相手（パスポート）のDBに直接書き込む
+    // ------------------------------------------
+    
+    // 一時的なトランザクションIDを発行
+    const transactionId = Utilities.getUuid();
+    
+    // 相手のSSを開く（権限がないとここでエラーになる）
+    const passportSs = SpreadsheetApp.openById(passportSsId);
+    
+    // 「ImportQueue」シート（受信ボックス）を取得、なければ作成
+    let queueSheet = passportSs.getSheetByName('ImportQueue');
+    if (!queueSheet) {
+      queueSheet = passportSs.insertSheet('ImportQueue');
+      queueSheet.appendRow(['transactionId', 'dataJson', 'createdAt']); // ヘッダー
+    }
+    
+    // データをJSON文字列化して追記
+    queueSheet.appendRow([
+      transactionId,
+      JSON.stringify(importData),
+      new Date()
+    ]);
+
+    // ------------------------------------------
+    // 3. フロントエンドへ、ID付きのURLを返す
+    // ------------------------------------------
+    
+    // パスポートを開く際に ?importId=xxx をつける
+    // (パスポート側で doGet(e) で e.parameter.importId を受け取る想定)
+    const openUrl = `${passportUrl}?page=wizard&importId=${transactionId}`;
+    
+    // 成功レスポンス
+    return createSuccessResponse({
+      message: "連携データを送信しました。パスポートを開きます。",
+      passportUrl: openUrl, // クライアントはこのURLを window.open するだけ
+      taskIds: "" // 今回はURLパラメータで渡すため空でOK
+    });
+
+  } catch (e) {
+    return createErrorResponse(e);
+  }
 }
