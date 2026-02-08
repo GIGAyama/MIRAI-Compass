@@ -1,94 +1,132 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
+  <!-- 
+    === 基本設定 ===
+    ページのタイトルや、スマホで見た時の表示倍率などを設定しています。
+  -->
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="自由進度学習支援アプリケーション">
   <title>みらいコンパス</title>
+  
+  <!-- ブラウザのタブに表示されるアイコン（コンパスのマーク） -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%231a73e8' class='bi bi-compass-fill' viewBox='0 0 16 16'%3E%3Cpath d='M15.5 8.516a7.5 7.5 0 1 1-9.462-7.24A7.5 7.5 0 0 1 15.5 8.516zM6.95.435c.58-.58 1.52-.58 2.1 0l6.515 6.516c.58.58.58 1.519 0 2.098L9.05 15.565c-.58.58-1.519.58-2.098 0L.435 9.05a1.482 1.482 0 0 1 0-2.098L6.95.435zM8 12v-3.5l-3.5.5L8 12zm0-9v3.5l3.5-.5L8 3z'/%3E%3C/svg%3E">
   
-  <!-- ライブラリの読み込み -->
+  <!-- 
+    === 外部ライブラリの読み込み ===
+    デザインや機能を整えるための便利な道具（ライブラリ）をインターネットから読み込んでいます。
+  -->
+  <!-- デザインの基本セット (Bootstrap 5) -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- アイコンセット (Bootstrap Icons) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
   
-  <!-- Google Fonts (Zen Maru Gothic) -->
+  <!-- フォント: Zen Maru Gothic (子供にも読みやすい丸ゴシック体) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
   
-  <!-- CSSの埋め込み -->
-  <?!= HtmlService.createHtmlOutputFromFile('css').getContent(); ?>
+  <!-- 
+    === CSS（デザイン定義）の読み込み ===
+    別ファイルの 'css.html' をここに埋め込みます。
+    色やレイアウトの調整は css.html を編集してください。
+  -->
+  <?!= include('css'); ?>
 </head>
 <body class="bg-light">
 
-  <!-- SOS通知音 (Base64) -->
-  <audio id="sos-chime" preload="auto" src="data:audio/mp3;base64,//uQRAAAAWMSLwUIYAAsYkXgoQwAEaYLWfkWgAI0wWs/ItAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKS"></audio>
+  <!-- 
+    === SOS通知音 ===
+    先生の画面でSOSが出た時に鳴るチャイム音です。
+  -->
+  <audio id="sos-chime" preload="auto" src="data:audio/mp3;base64,//uQRAAAAWMSLwUIYAAsYkXgoQwAEaYLWfkWgAI0wWs/ItAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKSAAAG1xUAALDkAAXG1iAAQA//4QBaKS"></audio>
 
-  <!-- ローディング画面 -->
+  <!-- 
+    === ローディング画面 ===
+    データ読み込み中に表示される、コンパスがくるくる回る画面です。
+  -->
   <div id="loading" class="position-fixed w-100 h-100 top-0 start-0 d-flex flex-column justify-content-center align-items-center bg-white" style="z-index: 9999;">
-    <!-- コンパスのアニメーション -->
     <div class="compass-loader mb-3">
       <div class="compass-needle"></div>
     </div>
     <p class="mt-2 fw-bold text-muted spacing-1">みらいコンパス<br><span style="font-size:0.8rem"><ruby>読<rt>よ</rt></ruby>み<ruby>込<rt>こ</rt></ruby>み<ruby>中<rt>ちゅう</rt></ruby>...</span></p>
   </div>
 
-  <!-- ナビゲーションバー -->
+  <!-- 
+    === ナビゲーションバー (画面上部の帯) ===
+  -->
   <nav class="navbar sticky-top bg-white shadow-sm mb-0 transition-bg">
     <div class="container d-flex justify-content-between align-items-center">
+      <!-- アプリ名ロゴ -->
       <span class="navbar-brand d-flex align-items-center fw-bold text-primary">
         <i class="bi bi-compass-fill me-2 fs-4 compass-icon"></i>
         <span>みらいコンパス</span>
       </span>
       
-      <!-- 単元選択（PC用） -->
+      <!-- 単元選択メニュー（PC画面用）: JSで自動生成されます -->
       <div id="unit-selector-container" class="mx-auto d-none d-md-block" style="min-width: 250px;">
-        <!-- JSでここに挿入 -->
+        <!-- JSによりここにドロップダウンリストが挿入されます -->
       </div>
       
-      <!-- 設定ボタンエリア -->
+      <!-- 右上の設定ボタンエリア -->
       <div class="d-flex align-items-center">
-        <!-- 児童モードへ戻るボタン (先生モード時のみJSで表示制御) -->
+        <!-- 先生モードの時だけ表示されるボタン群 -->
         <button class="btn btn-outline-primary btn-sm rounded-pill border-0 d-none me-2" id="btn-exit-teacher" type="button" onclick="switchMode('student')" aria-label="児童モードへ戻る">
           <i class="bi bi-person-fill me-1"></i>児童モードへ戻る
         </button>
 
-        <!-- 設定ボタン (先生モード時のみJSで表示制御) -->
         <button class="btn btn-outline-secondary btn-sm rounded-pill border-0 d-none" id="btn-settings" type="button" onclick="toggleSettings()" aria-label="設定">
           <i class="bi bi-gear-fill fs-5"></i>
         </button>
       </div>
     </div>
     
-    <!-- 単元選択（スマホ用） -->
+    <!-- 単元選択メニュー（スマホ画面用） -->
     <div class="container d-md-none mt-2 pb-2">
       <div id="unit-selector-mobile" class="w-100"></div>
     </div>
   </nav>
 
-  <!-- メインコンテンツ -->
+  <!-- 
+    === メインコンテンツエリア ===
+    ここに「今日の学習画面」や「先生用ダッシュボード」が表示されます。
+    中身はJavaScriptによって動的に書き換えられます。
+  -->
   <main class="container">
     <div id="app-container"></div>
   </main>
 
-  <!-- フッター -->
+  <!-- 
+    === フッター (画面下部) ===
+  -->
   <footer class="text-center text-muted py-2 border-top transition-bg d-flex justify-content-center align-items-center gap-3">
     <small>&copy; 2026 みらいコンパス <a href="https://note.com/cute_borage86" target="_blank" class="text-decoration-none text-muted">GIGA山</a></small>
     <a href="#" class="text-decoration-none text-muted small" style="font-size:0.75rem;" onclick="attemptTeacherLogin(); return false;">教員用ログイン</a>
   </footer>
 
-  <!-- ライブラリ群 -->
+  <!-- 
+    === JavaScriptライブラリの読み込み ===
+  -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script> <!-- ポップアップ画面用 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>       <!-- グラフ描画用 -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script> <!-- ドラッグ操作用 -->
 
-  <script>
-    // 初期モードは強制的にstudent
-    const INITIAL_MODE = 'student';
-  </script>
+  <!-- 
+    === アプリケーションロジックの読み込み ===
+    機能ごとに分割したJSファイルを順番に読み込みます。
+    Code.gs の include() 関数によって結合されます。
+  -->
   
-  <!-- クライアントサイドJSの読み込み -->
-  <?!= HtmlService.createHtmlOutputFromFile('js').getContent(); ?>
+  <!-- 1. 共通コア機能（設定、データ管理、通信） -->
+  <?!= include('js_core'); ?>
+  
+  <!-- 2. 生徒用機能（学習計画、ログ記録） -->
+  <?!= include('js_student'); ?>
+  
+  <!-- 3. 先生用機能（ダッシュボード、単元管理） -->
+  <?!= include('js_teacher'); ?>
+
 </body>
 </html>
