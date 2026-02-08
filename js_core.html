@@ -1,0 +1,749 @@
+<script>
+/**
+ * 🧭 みらいコンパス Ver. 2.0 - Core Logic (共通機能)
+ * ==============================================================================
+ * このファイルは、アプリ全体の土台となる「設定」「データ管理」「通信処理」を担当します。
+ * 生徒画面・先生画面のどちらでも使われる共通の関数が含まれています。
+ */
+
+// ==========================================
+//  1. グローバル設定と定数 (Settings)
+// ==========================================
+
+const CONSTANTS = {
+  LS_KEY_NAME: 'mirai_student_name',    // ブラウザに保存する名前のキー
+  LS_KEY_CLASS: 'mirai_student_class',  // ブラウザに保存するクラスのキー
+  LS_KEY_UNIT: 'mirai_current_unit_id', // ブラウザに保存する前回の単元ID
+  UNIT_TIME: 45,                        // 1コマの授業時間（分）
+  REFRESH_INTERVAL: 10000,              // 自動更新の間隔（ミリ秒） -> 10秒ごとに更新
+  SEAT_GRID_SIZE: 110,                  // 座席表のグリッドサイズ（ピクセル）
+  
+  // 時間割の設定（学校のチャイムに合わせて変更可能です）
+  CLASS_PERIODS: [
+    { id: 1, label: '1限', start: '08:45', end: '09:30' },
+    { id: 2, label: '2限', start: '09:40', end: '10:25' },
+    { id: 3, label: '3限', start: '10:45', end: '11:30' },
+    { id: 4, label: '4限', start: '11:40', end: '12:25' },
+    { id: 5, label: '5限', start: '13:55', end: '14:40' },
+    { id: 6, label: '6限', start: '14:50', end: '15:35' }
+  ]
+};
+
+// 資質・能力スキル定義（ふりかえり時に選択するバッジ）
+const SKILL_DEFINITIONS = [
+  { id: 'self_manage', label: '自己管理', group: '自分', color: 'primary' },
+  { id: 'planning', label: '計画性', group: '自分', color: 'primary' },
+  { id: 'communication', label: '対話', group: '人', color: 'success' },
+  { id: 'collaboration', label: '協力', group: '人', color: 'success' },
+  { id: 'challenge', label: '挑戦', group: '課題', color: 'danger' },
+  { id: 'thinking', label: '工夫', group: '課題', color: 'danger' },
+  { id: 'habit', label: '集中', group: '生活', color: 'warning' },
+  { id: 'responsibility', label: '責任', group: '生活', color: 'warning' }
+];
+
+// AI単元作成機能で使用する「呪文（プロンプト）」の初期値
+// [修正] 省略されていたプロンプトを完全版に戻します
+const DEFAULT_AI_PROMPT = 
+`あなたは、個別最適な学びと協働的な学びを一体化させた「自由進度学習」の設計スペシャリストであり、学習指導要領に精通したベテラン教師です。
+ユーザー（先生）と対話を行い、授業単元の計画を練り上げた上で、最終的にアプリ用のデータ（JSON）を出力してください。
+## **■ 対話と生成のプロセス**
+### **Step 1: 情報収集**
+まず、ユーザーに以下の情報を尋ねてください。
+「先生、授業計画を作成します。**教科・単元名・学年・単元の総時数** を教えてください。」
+### **Step 2: 計画案の提示**
+入力された情報に基づき、以下の「授業デザインのルール」に従って、具体的な指導計画案（シラバス）を提示してください。
+ここではJSONではなく、人間が読みやすいテキスト形式で、「第何時に何をするか」「どんな選択課題を用意するか」を提案してください。
+**提案のポイント:**
+1. **子供の興味関心**: 児童がワクワクするような「選択課題（Challenge）」のアイデアを複数提案すること。  
+2. **基礎の保障**: 学習指導要領を網羅する「必修課題（Must）」を適切な順序で配置すること。  
+3. **柔軟性**: タスク数は時数よりも多めに用意し、児童が選べる余地を作ること。
+### **Step 3: 修正と合意**
+ユーザーに「この計画でよろしいですか？ 修正点があれば教えてください。」と確認してください。
+修正指示があれば計画を練り直し、再提示してください。
+### **Step 4: JSON出力**
+ユーザーから「OK」「作成して」等の承認が得られたら、**確定した計画をJSON形式に変換し、コードブロックで出力**してください。
+**この段階では、JSONデータ以外（解説や挨拶など）は一切出力しないでください。**
+## **■ 授業デザインのルール**
+### **1\. 授業の時間構成（サンドイッチ型）**
+* **第1時**:  
+  * 全体を teacher\_led（先生主導）とし、単元の導入と学習計画の作成（オリエンテーション）を行う。  
+* **第2時以降**:  
+  * 以下の順序で構成する（45分授業のモデル）。  
+  * **① 導入（10分）**: 先生主導のミニレッスン。重要な概念の解説や、全体への共有事項。（teacher\_led, タイトルに【導入】と記載）  
+  * **② 展開（30分）**: 児童主体の自由進度学習。（individual）  
+  * **③ 終末（5分）**: 先生主導の振り返り、次時の予告。（teacher\_led, タイトルに【終末】と記載）
+### **2\. タスク（課題）の作成方針**
+* **必修課題 (must)**:  
+  * 「標準的な進度」を示すため、推奨する実施回（step）を設定する。  
+* **選択課題 (challenge)**:  
+  * 児童の興味に合わせた発展的な課題や、別のアプローチの課題。  
+  * 推奨回（step）を設定してもよいし、いつでも取り組めるプール課題として step を空欄（""）にしてもよい。  
+* **時間の粒度**:  
+  * 自由進度学習の時間は30分確保されているが、タスクの目安時間（estimatedTime）は15分〜45分など、内容に応じて柔軟に設定する（必ずしも15分刻みでなくてよい）。
+### **3\. データ出力のルール（重要：アプリの仕様対応）**
+アプリ側で正しく表示させるため、JSONの tasks 配列を出力する際は、**同一Step内で以下の順序になるように必ずソート（並べ替え）**して出力すること。
+1. **先頭**: teacher\_led かつ タイトルに【導入】を含むタスク  
+2. **中間**: individual なタスク（必修・選択）  
+3. **最後**: teacher\_led かつ タイトルに【終末】を含むタスク
+## **■ 出力JSONフォーマット（厳守）**
+{  
+  "unitInfo": {  
+    "subject": "教科名",  
+    "grade": 学年(数値),  
+    "unitName": "単元名",  
+    "totalHours": 総時数(数値),  
+    "goal": "子供向けの単元目標",  
+    "description": "単元の概要"  
+  },  
+
+  "tasks": [  
+    {  
+      "id": "一意のID (例: t\_01, t\_02...)",  
+      "category": "つかむ / まなぶ / ふかめる / まとめる",  
+      "type": "must (必修) / challenge (選択)",  
+      "format": "student (個別) / teacher (先生主導)",  
+      "step": "Step 1 (1時間目に固定する場合) / Step 2 ... / (空欄なら自由配置)",  
+      "title": "タスク名 (先生主導の場合は【導入】【終末】などを付記)",  
+      "description": "内容の説明",  
+      "estimatedTime": 目安時間(分・数値),  
+      "prerequisites": ["前提タスクID"] // なければ []  
+    }  
+  ] 
+}`;
+
+// ==========================================
+//  2. データ管理 (State Management)
+// ==========================================
+
+// アプリケーションの状態（今、誰が、どの画面を見ているか）
+let appState = {
+  mode: 'student', // 現在のモード ('student' または 'teacher')
+  user: {
+    name: "",      // ログイン中の名前
+    classId: ""    // ログイン中のクラス
+  },
+  view: {
+    student: 'daily',   // 生徒の表示 ('daily':今日の課題, 'planning':計画)
+    teacher: 'cards',   // 先生の表示 ('cards':一覧, 'heatmap':進捗, 'seating':座席, 'summaries':まとめ, 'design':設計)
+    teacherClassId: 'All' // 先生が見ているクラスフィルター
+  },
+  sound: { enabled: true, unlocked: false, prevSosCount: 0 }, // 音声通知の設定
+  unit: { id: "", title: "", totalHours: 8, currentHour: 1 }, // 現在選択中の単元情報
+  unitList: [],       // 全単元のリスト
+  schedules: [],      // 配信されたスケジュール通知
+  passportUrl: "",    // みらいパスポート（外部連携アプリ）のURL
+  passportDbId: ""    // みらいパスポートの連携用DB ID
+};
+
+// データベースから取得したデータの格納庫
+// ※サーバーのデータをここにコピーして画面に表示します
+let dataStore = {
+  masterTasks: [],      // [UnitMasterシート] 課題マスタ
+  myTasks: [],          // [MyTasksシート] 生徒が自分で作った課題
+  clsMyTasks: {},       // [MyTasksシート] クラス全員の自作課題（先生用）
+  liveStatus: [],       // [LiveStatusシート] リアルタイム状況（SOSなど）
+  clsProgress: {},      // [LearningLogsシート] クラス全員の進捗状況
+  clsFeedback: {},      // [Feedbackシート] 先生からのスタンプ履歴
+  clsPlans: {},         // [StudentPlansシート] クラス全員の学習計画
+  clsReflections: {},   // [DailyReflectionsシート] クラス全員の毎時間のふりかえり
+  clsPortfolios: {},    // [Portfoliosシート] クラス全員の単元のまとめ
+  studentProgress: {},  // (自分用) 進捗状況
+  studentFeedback: {},  // (自分用) スタンプ履歴
+  studentPlan: {},      // (自分用) 学習計画
+  portfolioData: {},    // (自分用) ポートフォリオ
+  studentReflections: {}, // (自分用) ふりかえり履歴
+  classList: [],        // クラス名リスト
+  roster: []            // [StudentRosterシート] 名簿データ
+};
+
+// 計算結果の一時保存用
+let computedState = { todaysPlanIds: new Set() };
+let autoRefreshTimer = null; // 自動更新タイマーのID
+let ssUrl = "";              // スプレッドシートのURL
+
+// 自分用タイマーの状態
+let myTimer = {
+  interval: null,
+  seconds: 0,
+  isActive: false,
+  mode: 'up', // 'up':カウントアップ, 'down':タイマー
+  target: 0
+};
+
+// ==========================================
+//  3. 初期化プロセス (Initialization)
+// ==========================================
+
+/**
+ * [機能] 画面読み込み時に実行される関数
+ * ブラウザがページを開いた瞬間に呼び出されます。
+ */
+window.onload = function() {
+  // Google Apps ScriptのAPIが使えるか確認
+  if (typeof google === 'undefined' || typeof google.script === 'undefined') {
+    console.warn('Google Script API not found. (ローカルテスト環境ですか？)');
+    return;
+  }
+
+  // サーバー(Code.gs)の getAppInitialData 関数を呼び出す
+  google.script.run
+    .withSuccessHandler(handleInitialResponse) // 成功したら handleInitialResponse へ
+    .withFailureHandler(handleError)           // 失敗したら handleError へ
+    .getAppInitialData();
+};
+
+/**
+ * [機能] 初期データの受信処理
+ * スプレッドシートIDがあるか確認し、あればデータを読み込みます。
+ */
+function handleInitialResponse(res) {
+  if (!res.success) { handleError({ message: res.error }); return; }
+  ssUrl = res.ssUrl;
+
+  // 「DBを開く」ボタンの設定
+  const btnSs = document.getElementById('btn-view-ss');
+  if (btnSs && ssUrl) btnSs.onclick = () => window.open(ssUrl, '_blank');
+
+  // システム未初期化（スプレッドシートがない）の場合
+  if (!res.isInitialized) {
+    renderSetupOverlay(); // 初期設定画面を表示
+  } else {
+    loadMainData();       // メインデータを読み込み開始
+  }
+}
+
+/**
+ * [機能] メインデータの読み込み
+ * サーバーから単元、生徒ログなどの全データを取得します。
+ */
+function loadMainData() {
+  const container = document.getElementById('app-container');
+  // 画面が空っぽならローディング表示
+  if (!container.hasChildNodes() || container.innerHTML === '') showLoading();
+  
+  // 【連携】みらいパスポートの設定（URLとID）を取得
+  google.script.run.withSuccessHandler(url => { appState.passportUrl = url; }).getPassportUrl();
+  google.script.run.withSuccessHandler(id => { appState.passportDbId = id; }).getPassportDbId();
+
+  // 【DB読込】getData関数を実行 (UnitMaster, LearningLogs等 全シート)
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res.success) {
+        updateDataStore(res.json); // データを変数に格納
+        renderUnitSelector();      // 単元選択メニューを描画
+        renderApp();               // アプリのメイン画面を描画
+        hideLoading();             // ローディングを消す
+        
+        // 生徒モードなら追加のチェック
+        if (appState.mode === 'student') {
+          if (typeof renderMyTimer === 'function') renderMyTimer(); // タイマー表示 (js_student.html)
+          checkScheduleAndNotify(); // 授業通知チェック
+          unlockAudio();            // 音声再生の準備
+        }
+      } else { 
+        handleError({ message: res.error }); 
+      }
+    })
+    .withFailureHandler(handleError)
+    .getData();
+}
+
+/**
+ * [機能] 初期セットアップ画面の表示
+ * 初めて使う時に表示される「初期設定を開始する」画面です。
+ */
+function renderSetupOverlay() {
+  const container = document.getElementById('app-container');
+  container.innerHTML = `
+    <div class="d-flex flex-column justify-content-center align-items-center vh-100 text-center">
+      <div class="card p-5 shadow-lg border-0 rounded-4" style="max-width: 600px;">
+        <h1 class="text-primary mb-4 fw-bold"><i class="bi bi-compass me-2"></i>ようこそ</h1>
+        <div class="text-start bg-light p-4 rounded-3 mb-4">
+          <p class="mb-3">「みらいコンパス」は、子どもたちが主体的に学ぶ「自由進度学習」をサポートするWebアプリケーションです。</p>
+          <p class="mb-0">初期設定ボタンを押すと、Googleドライブにデータベース（スプレッドシート）が自動作成されます。</p>
+        </div>
+        <div class="alert alert-warning mb-4" role="alert">
+          <div class="fw-bold mb-1">【重要】先生用パスワード（初期）</div>
+          <div class="display-6 fw-bold text-danger" style="letter-spacing: 2px;">admin</div>
+        </div>
+        <button class="btn btn-primary btn-lg rounded-pill px-5 shadow-sm" onclick="startInitialization()">初期設定を開始する</button>
+      </div>
+    </div>`;
+  hideLoading();
+}
+
+/**
+ * [機能] システム初期化の実行
+ * 新しいスプレッドシートを作成します。
+ */
+function startInitialization() {
+  showLoading();
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) {
+        Swal.fire('初期化完了', 'データベースを作成しました。', 'success');
+        loadMainData(); // データ読み込みへ
+      } else handleError({ message: r.error });
+    })
+    .withFailureHandler(handleError)
+    .initSystem();
+}
+
+// ==========================================
+//  4. データの更新と同期 (Sync & Refresh)
+// ==========================================
+
+/**
+ * [機能] 自動更新タイマー（ポーリング）
+ * 10秒ごとにサーバーから最新の「状況データ（LiveStatus）」だけを取得します。
+ * これにより、先生の画面で子供たちのSOSなどがリアルタイムに反映されます。
+ */
+function startAutoRefresh() {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  
+  autoRefreshTimer = setInterval(() => {
+    // ブラウザのタブが裏に隠れている時は通信を止める（PC負荷軽減）
+    if (document.hidden) return;
+
+    // 【DB読込】LiveStatusシートのみを軽量取得
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res.success && res.live) {
+          // データを更新
+          dataStore.liveStatus = res.live;
+          
+          // 先生モードなら、画面全体を再描画せず、カードのステータスだけ書き換える（高速化）
+          if (appState.mode === 'teacher') {
+            if (typeof updateLiveViews === 'function') updateLiveViews(); // js_teacher.htmlで定義
+            checkSosAndPlaySound();
+          }
+          // 生徒モードなら、先生からの呼び出し通知などをチェック
+          else if (appState.mode === 'student') {
+            checkScheduleAndNotify();
+          }
+        }
+      })
+      .withFailureHandler(e => console.error("Polling Error", e))
+      .getLiveStatusSnapshot(); // サーバー側の軽量関数
+      
+  }, CONSTANTS.REFRESH_INTERVAL);
+}
+
+/**
+ * [機能] 取得したデータを変数(dataStore)に格納・整理する
+ */
+function updateDataStore(jsonStr) {
+  const d = JSON.parse(jsonStr);
+  dataStore.masterTasks = d.unit || [];
+  dataStore.liveStatus = d.live || [];
+  dataStore.clsProgress = d.progress || {};
+  dataStore.clsFeedback = d.feedback || {};
+  dataStore.clsMyTasks = d.myTasks || {};
+  dataStore.clsPlans = d.plans || {};
+  dataStore.clsReflections = d.dailyReflections || {};
+  dataStore.clsPortfolios = d.portfolios || {};
+  dataStore.roster = d.roster || [];
+  appState.schedules = d.schedules || [];
+
+  // 単元リストを作成（UnitMasterから単元IDごとにまとめる）
+  const unitsMap = new Map();
+  dataStore.masterTasks.forEach(t => {
+    if (t.unitId && !unitsMap.has(t.unitId)) {
+      const uInfo = t.unitInfo || {};
+      unitsMap.set(t.unitId, {
+        id: t.unitId,
+        title: uInfo.title || '無題の単元',
+        subject: uInfo.subject || '',
+        totalHours: Number(t.totalHours) || 8,
+        grade: uInfo.grade || '',
+        goal: uInfo.goal || '',
+        description: uInfo.description || ''
+      });
+    }
+  });
+  // 新しい単元順に並べ替え
+  appState.unitList = Array.from(unitsMap.values()).sort((a, b) => b.id.localeCompare(a.id));
+
+  // 現在の単元を選択（未選択なら最新の単元）
+  if (appState.unitList.length > 0 && !appState.unit.id) {
+    const savedId = localStorage.getItem(CONSTANTS.LS_KEY_UNIT);
+    const target = appState.unitList.find(u => u.id === savedId) || appState.unitList[0];
+    appState.unit.id = target.id;
+    appState.unit.title = target.title;
+    appState.unit.totalHours = target.totalHours;
+  } else if (appState.unitList.length === 0) {
+    appState.unit.id = "";
+    appState.unit.title = "単元データなし";
+  }
+
+  // クラスリストを作成（データが存在するクラス一覧）
+  const classes = new Set();
+  dataStore.liveStatus.forEach(s => { if(s.classId) classes.add(s.classId); });
+  dataStore.roster.forEach(r => { if(r.classId) classes.add(r.classId); });
+  if(classes.size === 0) classes.add('1組');
+  dataStore.classList = Array.from(classes).sort();
+}
+
+// ==========================================
+//  5. 共通アクション (Common Actions)
+// ==========================================
+
+/**
+ * [機能] 単元の切り替え
+ * ドロップダウンで単元が変更された時に呼ばれます。
+ */
+function changeUnit(unitId) {
+  const target = appState.unitList.find(u => u.id === unitId);
+  if (target) {
+    appState.unit.id = target.id;
+    appState.unit.title = target.title;
+    appState.unit.totalHours = target.totalHours;
+    localStorage.setItem(CONSTANTS.LS_KEY_UNIT, unitId);
+    
+    // 生徒モード：自分のデータを再読み込み
+    if(appState.mode === 'student' && appState.user.name) {
+      if (typeof syncStudentPlan === 'function') syncStudentPlan();
+      if (typeof renderStudentView === 'function') renderStudentView();
+      if (typeof loginStudent === 'function') loginStudent(true); // サーバーからデータ取得
+      if (typeof submitUserStatus === 'function') submitUserStatus(getSelfStatusMode()); 
+    } 
+    // 先生モード：画面再描画
+    else if (appState.mode === 'teacher') {
+      if (typeof renderTeacherView === 'function') renderTeacherView();
+    }
+  }
+}
+
+/**
+ * [機能] モード切替（生徒 ⇔ 先生）
+ */
+function switchMode(newMode) {
+  appState.mode = newMode;
+  
+  // 生徒モードへの切り替え時はデータを再取得して最新状態にする
+  if(newMode === 'student') {
+    showLoading();
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res.success) {
+          updateDataStore(res.json);
+          renderApp(); // 画面描画
+          startAutoRefresh(); // 自動更新開始
+          hideLoading();
+        } else {
+          handleError({message: res.error});
+        }
+      })
+      .withFailureHandler(handleError)
+      .getData();
+  } else {
+    // 先生モードへは即時切り替え
+    renderApp();
+  }
+}
+
+/**
+ * [機能] 画面全体の描画ディスパッチャ（振り分け）
+ * 現在のモードに合わせて、生徒用または先生用の画面を描画します。
+ */
+function renderApp() {
+  try {
+    const mainEl = document.querySelector('main');
+    const settingsBtn = document.getElementById('btn-settings');
+    const exitBtn = document.getElementById('btn-exit-teacher');
+    
+    if (appState.mode === 'teacher') {
+      // 先生モード
+      mainEl.classList.add('teacher-mode'); // 横幅制限を解除
+      settingsBtn.classList.remove('d-none'); // 設定ボタン表示
+      exitBtn.classList.remove('d-none');     // 終了ボタン表示
+      if (typeof renderTeacherView === 'function') renderTeacherView();
+    } else {
+      // 生徒モード
+      mainEl.classList.remove('teacher-mode');
+      settingsBtn.classList.add('d-none');
+      exitBtn.classList.add('d-none');
+      
+      const savedName = localStorage.getItem(CONSTANTS.LS_KEY_NAME);
+      const savedClass = localStorage.getItem(CONSTANTS.LS_KEY_CLASS);
+      
+      // 名前がまだ入力されていない場合
+      if (!appState.user.name && savedName) {
+        // 保存された名前があれば自動ログイン
+        appState.user.name = savedName;
+        appState.user.classId = savedClass || "1組";
+        if (typeof loginStudent === 'function') loginStudent(true);
+      } else if (!appState.user.name) {
+        // 名前入力画面を表示
+        if (typeof renderNameEntry === 'function') renderNameEntry();
+      } else {
+        // ログイン済みなら学習画面を表示
+        if (typeof syncStudentPlan === 'function') syncStudentPlan();
+        if (typeof renderStudentView === 'function') renderStudentView();
+      }
+    }
+  } catch (e) {
+    console.error(e);
+    handleError({ message: "描画エラー: " + e.message });
+  }
+}
+
+/**
+ * [機能] 単元選択ドロップダウンの描画
+ */
+function renderUnitSelector() {
+  const options = appState.unitList.map(u => 
+    `<option value="${u.id}" ${u.id === appState.unit.id ? 'selected' : ''}>${u.subject ? '【'+u.subject+'】' : ''} ${u.title}</option>`
+  ).join('');
+  
+  const html = `
+    <div class="input-group input-group-sm">
+      <span class="input-group-text bg-white border-end-0 text-primary"><i class="bi bi-book-half"></i></span>
+      <!-- 修正: max-widthを 200px から 450px に変更 -->
+      <select class="form-select border-start-0 fw-bold text-primary bg-light" onchange="changeUnit(this.value)" style="box-shadow:none; max-width: 450px;">
+        ${options.length > 0 ? options : '<option>単元なし</option>'}
+      </select>
+      <button class="btn btn-outline-secondary border-start-0" type="button" onclick="showUnitInfoModal()" title="単元の詳細">
+        <i class="bi bi-info-circle"></i>
+      </button>
+    </div>
+  `;
+  
+  const c1 = document.getElementById('unit-selector-container'); // PC用
+  const c2 = document.getElementById('unit-selector-mobile');    // スマホ用
+  if(c1) c1.innerHTML = html;
+  if(c2) c2.innerHTML = html;
+}
+
+// ==========================================
+//  6. ヘルパー関数 (Helpers & Utils)
+// ==========================================
+
+// 自分のステータス（通常/SOS/集中）を取得
+function getSelfStatusMode() {
+  const me = dataStore.liveStatus.find(s => s.name === appState.user.name);
+  return me ? me.mode : '通常';
+}
+
+// 現在の単元のタスク一覧を取得
+function getCurrentUnitTasks() {
+  return dataStore.masterTasks.filter(t => t.unitId === appState.unit.id);
+}
+
+// スケジュール通知のチェック（生徒用）
+function checkScheduleAndNotify() {
+  if (!appState.user.classId || appState.schedules.length === 0) return;
+  
+  const now = new Date();
+  const dateStr = now.getFullYear() + "-" + ('0' + (now.getMonth() + 1)).slice(-2) + "-" + ('0' + now.getDate()).slice(-2);
+  const timeStr = ('0' + now.getHours()).slice(-2) + ":" + ('0' + now.getMinutes()).slice(-2);
+  
+  // 今の日時・クラスに一致するスケジュールを探す
+  const currentSchedule = appState.schedules.find(s => 
+    s.classId === appState.user.classId && 
+    s.date === dateStr &&
+    s.startTime <= timeStr && s.endTime >= timeStr
+  );
+
+  let notifyBar = document.getElementById('schedule-notify-bar');
+  
+  if (currentSchedule) {
+    const unit = appState.unitList.find(u => u.id === currentSchedule.unitId);
+    const unitTitle = unit ? unit.title : "不明な単元";
+    const msg = currentSchedule.message || `ただ今の授業：${unitTitle} 第${currentSchedule.hour}時`;
+    
+    // 通知バーを作成・更新
+    if (!notifyBar) {
+      notifyBar = document.createElement('div');
+      notifyBar.id = 'schedule-notify-bar';
+      notifyBar.className = 'bg-info text-white text-center py-2 px-3 shadow-sm cursor-pointer animate__animated animate__fadeInDown';
+      notifyBar.style.cssText = 'position:fixed; top:60px; left:0; right:0; z-index:1020;';
+      notifyBar.onclick = () => {
+        // 通知クリックで該当単元へ移動
+        if(unit) {
+          changeUnit(unit.id);
+          if (typeof changeCurrentHour === 'function') changeCurrentHour(currentSchedule.hour);
+          if(currentSchedule.message) Swal.fire({ title: '先生からのメッセージ', text: currentSchedule.message, icon: 'info' });
+        }
+      };
+      document.body.appendChild(notifyBar);
+    }
+    notifyBar.innerHTML = `<i class="bi bi-broadcast me-2"></i><span class="fw-bold">${msg}</span> <small class="ms-2 border rounded-pill px-2">移動する</small>`;
+  } else {
+    // 時間外なら通知バーを消す
+    if (notifyBar) notifyBar.remove();
+  }
+}
+
+// 音声通知（SOS用）
+function unlockAudio() { 
+  const audio = document.getElementById('sos-chime'); 
+  if (audio && !appState.sound.unlocked) { 
+    // ユーザー操作時に一度無音で再生して、ブラウザの自動再生制限を解除する
+    audio.volume = 0; 
+    audio.play().then(() => { 
+      audio.pause(); 
+      audio.currentTime = 0; 
+      audio.volume = 0.5; 
+      appState.sound.unlocked = true; 
+    }).catch(e => {}); 
+  } 
+}
+
+function checkSosAndPlaySound() { 
+  const currentSosCount = dataStore.liveStatus.filter(d => d.mode === 'たすけて' || d.mode === 'sos').length; 
+  // SOSの数が増えた時だけ音を鳴らす
+  if (currentSosCount > appState.sound.prevSosCount) { 
+    const audio = document.getElementById('sos-chime'); 
+    if (audio) audio.play().catch(e => {}); 
+  } 
+  appState.sound.prevSosCount = currentSosCount; 
+}
+
+// カテゴリに応じたCSSクラスを返す
+function getCategoryColorClass(cat) {
+  if (cat.includes('まなぶ')) return 'border-start-manabu';
+  if (cat.includes('ふかめる')) return 'border-start-fukameru';
+  if (cat.includes('まとめる')) return 'border-start-matomeru';
+  if (cat === 'マイタスク') return 'border-start-mytask';
+  return 'border-start-other';
+}
+
+// ステップ文字列 ("Step 1") から数値 (1) を取り出す
+function getStepNumber(stepStr) {
+  if(!stepStr) return -1;
+  const match = stepStr.match(/\d+/);
+  return match ? parseInt(match[0], 10) : -1;
+}
+
+// トースト通知（右上のポップアップ）
+function showToast(icon, title) { 
+  Swal.fire({ toast: true, position: 'top-end', icon: icon, title: title, timer: 2000, showConfirmButton: false }); 
+}
+
+// エラー表示
+function handleError(err) { 
+  hideLoading(); 
+  Swal.fire({ title: 'システムエラー', text: err.message || err.toString(), icon: 'error' }); 
+}
+
+// ローディング画面の制御
+function showLoading() { const e = document.getElementById('loading'); if (e) e.classList.remove('d-none'); }
+function hideLoading() { const e = document.getElementById('loading'); if (e) e.classList.add('d-none'); }
+
+// ==========================================
+//  7. 外部連携 (Passport Integration)
+// ==========================================
+
+/**
+ * [機能] みらいパスポート（別アプリ）の起動
+ * @param {string} taskId - 現在取り組んでいる課題ID
+ */
+function launchPassport(taskId) {
+  if (!appState.passportUrl) {
+    Swal.fire({
+      icon: 'warning',
+      title: '連携未設定',
+      text: '「みらいパスポート」のURLが設定されていません。先生に確認してください。'
+    });
+    return;
+  }
+
+  // 自動ログイン用の情報をURLパラメータとして付与
+  const params = new URLSearchParams({
+    mode: 'student',
+    taskId: taskId,
+    studentId: appState.user.name, // 簡易的に名前をIDとして使用
+    studentName: appState.user.name
+  });
+
+  const url = `${appState.passportUrl}?${params.toString()}`;
+  window.open(url, '_blank'); // 別タブで開く
+}
+
+/**
+ * [機能] 設定モーダル（連携設定など）
+ */
+function toggleSettings() { 
+  Swal.fire({
+    title: '設定',
+    html: `
+      <div class="text-start">
+        <label class="form-label small fw-bold">みらいパスポート URL</label>
+        <input type="url" id="swal-passport-url" class="form-control mb-3" placeholder="https://script.google.com/..." value="${appState.passportUrl || ''}">
+        
+        <label class="form-label small fw-bold">みらいパスポート DB ID</label>
+        <input type="text" id="swal-passport-db-id" class="form-control mb-3" placeholder="スプレッドシートID" value="${appState.passportDbId || ''}">
+        
+        <div class="d-grid gap-2">
+          <button class="btn btn-outline-secondary btn-sm" onclick="changePasswordPrompt()">教員パスワード変更</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="openRosterManagerModal()">名簿管理</button>
+        </div>
+      </div>
+    `,
+    showCancelButton: true,
+    confirmButtonText: '保存',
+    preConfirm: () => {
+      return {
+        url: document.getElementById('swal-passport-url').value,
+        dbId: document.getElementById('swal-passport-db-id').value
+      };
+    }
+  }).then((result) => {
+    if (result.isConfirmed) {
+      const data = result.value;
+      if (data.url && !data.url.startsWith('http')) {
+        Swal.fire('エラー', '正しいURLを入力してください', 'error');
+        return;
+      }
+      showLoading();
+      // 【連携】設定をサーバープロパティに保存
+      google.script.run
+        .withSuccessHandler(() => {
+          appState.passportUrl = data.url;
+          appState.passportDbId = data.dbId;
+          hideLoading();
+          showToast('success', '設定を保存しました');
+        })
+        .withFailureHandler(handleError)
+        .savePassportConfig(data.dbId, data.url);
+    }
+  });
+}
+
+/**
+ * [モーダル] 単元詳細情報（めあて・概要）を表示
+ * ヘッダーの (i) ボタンから呼び出されます。
+ */
+function showUnitInfoModal() {
+  const unit = appState.unitList.find(u => u.id === appState.unit.id);
+  if (!unit) return;
+
+  Swal.fire({
+    title: `<div class="fs-5 fw-bold text-primary">${unit.subject || ''} ${unit.grade ? '('+unit.grade+')' : ''}</div><div class="fs-4">${unit.title}</div>`,
+    html: `
+      <div class="text-start p-2">
+        <div class="mb-3">
+          <label class="small text-muted fw-bold">単元のめあて</label>
+          <div class="p-3 bg-light rounded border-start border-5 border-success">
+            <i class="bi bi-flag-fill text-success me-2"></i>
+            <span class="fw-bold text-dark">${unit.goal || '（目標は設定されていません）'}</span>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="small text-muted fw-bold">概要</label>
+          <div class="small text-secondary">
+            ${unit.description ? unit.description.replace(/\n/g, '<br>') : '（概要はありません）'}
+          </div>
+        </div>
+        <div class="text-end small text-muted">
+          総時数: ${unit.totalHours}時間
+        </div>
+      </div>
+    `,
+    showCloseButton: true,
+    showConfirmButton: false,
+    width: '500px'
+  });
+}
+</script>
