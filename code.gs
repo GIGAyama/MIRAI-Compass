@@ -292,15 +292,16 @@ function getData() {
       };
     });
 
-    // 今日のスケジュールのみ取得
+    // 今日以降のスケジュールのみ取得
+    // ※シート上で日付文字列がDate型に自動変換されるため、必ず正規化してから比較する
     const todayStr = Utilities.formatDate(new Date(), "JST", "yyyy-MM-dd");
     const schedules = fetchSheetData(ss, DB_SCHEMA.ClassSchedule.name)
-      .filter(r => String(r[2]) >= todayStr)
       .map(r => ({
-        id: String(r[0]), classId: String(r[1]), date: String(r[2]), 
-        startTime: formatDate(r[3]), endTime: formatDate(r[4]), 
+        id: String(r[0]), classId: String(r[1]), date: normalizeDateStr(r[2]),
+        startTime: normalizeTimeStr(r[3]), endTime: normalizeTimeStr(r[4]),
         unitId: String(r[5]), hour: String(r[6]), message: String(r[7])
-      }));
+      }))
+      .filter(s => s.date >= todayStr);
 
     return createSuccessResponse({
       json: JSON.stringify({
@@ -448,7 +449,10 @@ function updateLiveStatusMeta(ss, name, classId, unitId) {
  */
 function updateStatus(studentName, taskId, taskTitle, status, mode, reflection, classId, currentUnitId) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) throw new Error("サーバーが混み合っています。もう一度お試しください。");
+  // 他のAPIと同様、失敗時も {success:false} 形式で返す（throwするとクライアントの成功/失敗判定が不統一になる）
+  if (!lock.tryLock(10000)) {
+    return createErrorResponse(new Error("サーバーが混み合っています。もう一度お試しください。"));
+  }
 
   try {
     const ss = getSpreadsheet();
@@ -1101,6 +1105,12 @@ function fetchSheetData(ss, sheetName) {
 }
 
 function checkAndFixSheets(ss) {
+  // ほぼ全APIから呼ばれる高コスト処理のため、チェック結果を6時間キャッシュして高速化する
+  // （スキーマ変更時はキャッシュ期限切れ後に自動で再チェックされる）
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'schema_ok_' + ss.getId();
+  if (cache.get(cacheKey)) return;
+
   Object.keys(DB_SCHEMA).forEach(key => {
     const def = DB_SCHEMA[key];
     let sheet = ss.getSheetByName(def.name);
@@ -1115,9 +1125,38 @@ function checkAndFixSheets(ss) {
       }
     }
   });
+
+  cache.put(cacheKey, '1', 21600); // 6時間
 }
 
 function createSuccessResponse(data = {}) { return { success: true, ...data }; }
 function createErrorResponse(error) { console.error(error); return { success: false, error: error.toString() }; }
 function safeJsonParse(str) { try { return JSON.parse(str || '{}'); } catch(e) { return {}; } }
 function formatDate(d) { try { return Utilities.formatDate(new Date(d), "JST", "HH:mm"); } catch(e) { return ""; } }
+
+/**
+ * 日付セルを "yyyy-MM-dd" 文字列に正規化する
+ * シートは "2026-07-12" のような文字列を自動的にDate型へ変換するため、
+ * Date型・文字列のどちらで格納されていても同じ形式で返す
+ */
+function normalizeDateStr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, "JST", "yyyy-MM-dd");
+  const s = String(v || "");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  try {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return Utilities.formatDate(d, "JST", "yyyy-MM-dd");
+  } catch (e) {}
+  return s;
+}
+
+/**
+ * 時刻セルを "HH:mm" 文字列に正規化する（Date型・"8:45"のような文字列の両対応）
+ */
+function normalizeTimeStr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, "JST", "HH:mm");
+  const s = String(v || "");
+  const m = s.match(/^(\d{1,2}):(\d{2})/);
+  if (m) return ('0' + m[1]).slice(-2) + ':' + m[2];
+  return s;
+}

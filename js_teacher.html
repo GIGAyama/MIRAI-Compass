@@ -571,7 +571,7 @@ function renderSummaryListView(container) {
         </td>
         <td class="st-col-summary">
           <div class="summary-text-area" id="summary-${uniqueId}" onclick="this.style.maxHeight='none'; this.style.cursor='text';" title="クリックで全文表示">
-            ${summary ? summary.replace(/\n/g, '<br>') : '<span class="summary-empty">未提出</span>'}
+            ${summary ? escapeHtml(summary).replace(/\n/g, '<br>') : '<span class="summary-empty">未提出</span>'}
           </div>
         </td>
         <td class="st-col-feedback align-middle">
@@ -582,7 +582,7 @@ function renderSummaryListView(container) {
             <label><input type="radio" name="stamp-${uniqueId}" value="support" class="stamp-input" ${stamp==='support'?'checked':''}><span class="stamp-option" title="応援">🚩</span></label>
           </div>
           <div class="input-group input-group-sm">
-            <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${feedback}">
+            <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${escapeHtml(feedback)}">
             <button id="btn-save-${uniqueId}" class="btn btn-primary" onclick="saveListFeedback('${s.name}', '${uniqueId}')">保存</button>
           </div>
         </td>
@@ -1208,8 +1208,9 @@ function openUnitManagerModal() {
 }
 
 function submitCreateUnit() {
-  const title = document.getElementById('cu-title').value;
-  if (!title) { Swal.showValidationMessage('単元名を入力してください'); return; }
+  const title = document.getElementById('cu-title').value.trim();
+  // このモーダルは確認ボタン非表示のため showValidationMessage は使えない
+  if (!title) { showToast('error', '単元名を入力してください'); return; }
   const data = { title: title, subject: document.getElementById('cu-subject').value, grade: document.getElementById('cu-grade').value, totalHours: parseInt(document.getElementById('cu-hours').value) || 8 };
   
   showLoading();
@@ -1223,8 +1224,8 @@ function submitCreateUnit() {
           hideLoading();
           Swal.close();
           Swal.fire('作成完了', '新しい単元を作成しました', 'success');
-        }).getData();
-      } else { handleError(res); }
+        }).withFailureHandler(handleError).getData();
+      } else { handleError({ message: res.error }); }
     })
     .withFailureHandler(handleError)
     .createNewUnit(data);
@@ -1255,7 +1256,8 @@ function resetCustomPrompt() {
 function submitImportJson() {
   const jsonStr = document.getElementById('json-input').value;
   if (!jsonStr) return;
-  try { JSON.parse(jsonStr); } catch(e) { Swal.showValidationMessage('JSON形式が正しくありません'); return; }
+  // このモーダルは確認ボタン非表示のため showValidationMessage は使えない
+  try { JSON.parse(jsonStr); } catch(e) { showToast('error', 'JSON形式が正しくありません'); return; }
 
   showLoading();
   google.script.run.withSuccessHandler(d => {
@@ -1270,9 +1272,9 @@ function submitImportJson() {
         hideLoading();
         Swal.close();
         Swal.fire('インポート完了', d.count + '件の課題を追加しました', 'success');
-      }).getData();
-    } else { handleError(d); }
-  }).importUnitJson(jsonStr);
+      }).withFailureHandler(handleError).getData();
+    } else { handleError({ message: d.error }); }
+  }).withFailureHandler(handleError).importUnitJson(jsonStr);
 }
 
 // [連携] パスポートへ単元計画を送信
@@ -1314,7 +1316,9 @@ function syncUnitToPassport() {
 
 function renderControlView(container) {
   container.className = "flex-grow-1 overflow-auto p-3";
-  const todayStr = new Date().toISOString().split('T')[0];
+  // ローカルタイムゾーンで今日の日付を取得（toISOString はUTC基準のため朝9時前は前日になってしまう）
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${('0' + (now.getMonth() + 1)).slice(-2)}-${('0' + now.getDate()).slice(-2)}`;
   const unitOptions = appState.unitList.map(u => `<option value="${u.id}">${u.title}</option>`).join('');
   const periodButtons = CONSTANTS.CLASS_PERIODS.map(p => `<button class="btn btn-outline-secondary btn-sm me-1 mb-1" onclick="setScheduleTime('${p.start}', '${p.end}')">${p.label}</button>`).join('');
 
@@ -1377,7 +1381,7 @@ function submitSchedule() {
   google.script.run.withSuccessHandler(() => {
     showToast('success', 'スケジュールを配信しました');
     loadMainData();
-  }).saveClassSchedule(data);
+  }).withFailureHandler(handleError).saveClassSchedule(data);
 }
 
 // ==========================================
@@ -1648,8 +1652,9 @@ function cleanRosterData() {
 }
 
 function submitSaveRoster() {
-  const classId = document.getElementById('roster-class').value;
-  if (!classId) { Swal.showValidationMessage('クラス名を入力してください'); return; }
+  const classId = document.getElementById('roster-class').value.trim();
+  // このモーダルは確認ボタン非表示のため showValidationMessage は使えない
+  if (!classId) { showToast('error', 'クラス名を入力してください'); return; }
   
   if (rosterEditData.length === 0) {
      if(!confirm('名簿が空ですが、このまま保存しますか？（現在の名簿が消去されます）')) return;
@@ -1677,10 +1682,11 @@ function submitSaveRoster() {
 
 function showStudentTaskDetail(name, tid) {
   const t = dataStore.masterTasks.find(x => x.taskId === tid);
+  if (!t) return;
   const p = (dataStore.clsProgress[name] && dataStore.clsProgress[name][tid]) || {};
   Swal.fire({
     title: `${name} さんの状況`,
-    html: `<div class="text-start"><h6 class="fw-bold text-primary">${t.title}</h6><div class="mb-3"><span class="badge bg-secondary me-1">状態: ${p.status||'未'}</span></div><div class="p-3 bg-light rounded mb-3 small">${p.reflection||'メモなし'}</div><hr><div class="d-flex justify-content-center gap-2"><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','check')">✅</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','good')">👍</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','great')">💮</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','support')">🚩</button></div></div>`,
+    html: `<div class="text-start"><h6 class="fw-bold text-primary">${escapeHtml(t.title)}</h6><div class="mb-3"><span class="badge bg-secondary me-1">状態: ${p.status||'未'}</span></div><div class="p-3 bg-light rounded mb-3 small">${escapeHtml(p.reflection)||'メモなし'}</div><hr><div class="d-flex justify-content-center gap-2"><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','check')">✅</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','good')">👍</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','great')">💮</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','support')">🚩</button></div></div>`,
     showConfirmButton: false,
     showCloseButton: true
   });
