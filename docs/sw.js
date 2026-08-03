@@ -7,7 +7,17 @@
  * ここではキャッシュしません（常に最新のアプリが表示されます）。
  */
 
-const CACHE_VERSION = 'mirai-compass-shell-v1';
+/*
+ * 【最重要】activate では自アプリ以外のキャッシュを削除しない。
+ *   gigayama.github.io は数十個のアプリが同一オリジンを共有しているため、
+ *   CACHE_PREFIX で始まるキャッシュだけを掃除する。
+ *   以前はここで caches.keys() の結果を全部消していた。そのため
+ *   このアプリを開くたびに、同じ端末に入っている他の GIGA アプリの
+ *   キャッシュまで巻き添えで消え、それらがオフラインで起動しなくなっていた。
+ */
+const CACHE_PREFIX = 'mirai-compass-shell-';
+const APP_VERSION = 'v2';   // ← リリースごとに必ず上げる
+const CACHE_VERSION = CACHE_PREFIX + APP_VERSION;
 
 // キャッシュするシェル資産（すべて相対パス = GitHub Pages のサブパス配信に対応）
 const SHELL_ASSETS = [
@@ -35,7 +45,11 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(
-        keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k))
+        keys
+          // ← 自アプリ接頭辞のものだけを削除する。ここを外すと
+          //    同一オリジンの他アプリを巻き添えにする。
+          .filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE_VERSION)
+          .map((k) => caches.delete(k))
       ))
       .then(() => self.clients.claim())
   );
