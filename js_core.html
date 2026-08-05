@@ -457,19 +457,26 @@ function renderApp() {
     const mainEl = document.querySelector('main');
     const settingsBtn = document.getElementById('btn-settings');
     const exitBtn = document.getElementById('btn-exit-teacher');
-    
+    const presentBtn = document.getElementById('btn-presentation');
+
     if (appState.mode === 'teacher') {
       // 先生モード
       mainEl.classList.add('teacher-mode'); // 横幅制限を解除
       settingsBtn.classList.remove('d-none'); // 設定ボタン表示
       exitBtn.classList.remove('d-none');     // 終了ボタン表示
+      if (presentBtn) presentBtn.classList.remove('d-none'); // 提示モードボタン表示
       if (typeof renderTeacherView === 'function') renderTeacherView();
     } else {
       // 生徒モード
       mainEl.classList.remove('teacher-mode');
       settingsBtn.classList.add('d-none');
       exitBtn.classList.add('d-none');
-      
+      if (presentBtn) presentBtn.classList.add('d-none');
+      // 児童モードへ戻るときは提示モードも解除する
+      document.body.classList.remove('presentation', 'names-hidden');
+      const nameBtn = document.getElementById('btn-toggle-names');
+      if (nameBtn) nameBtn.remove();
+
       const savedName = localStorage.getItem(CONSTANTS.LS_KEY_NAME);
       const savedClass = localStorage.getItem(CONSTANTS.LS_KEY_CLASS);
       
@@ -678,10 +685,82 @@ function launchPassport(taskId) {
   window.open(url, '_blank'); // 別タブで開く
 }
 
+// ==========================================
+//  提示モード・印刷（一斉授業で使う）
+// ==========================================
+
+/**
+ * [機能] 提示モードの切り替え
+ * 電子黒板に映して一斉授業をするときに押します。
+ * 教室のうしろの席から読めるよう文字とボタンを大きくし、
+ * 児童名は既定で伏せます（個人情報を教室の外へ出さないため）。
+ */
+function togglePresentationMode() {
+  const on = document.body.classList.toggle('presentation');
+
+  // 名前は既定で伏せる。先生が「なまえを出す」を押したときだけ表示する。
+  document.body.classList.toggle('names-hidden', on);
+
+  const btn = document.getElementById('btn-presentation');
+  if (btn) {
+    btn.setAttribute('aria-pressed', String(on));
+    btn.setAttribute('aria-label', on ? '提示モードをやめる' : '大きく表示（提示モード）');
+  }
+
+  // 名前の出し入れボタンは提示モードのときだけ出す
+  let nameBtn = document.getElementById('btn-toggle-names');
+  if (on && !nameBtn) {
+    nameBtn = document.createElement('button');
+    nameBtn.id = 'btn-toggle-names';
+    nameBtn.type = 'button';
+    nameBtn.className = 'btn btn-outline-secondary btn-sm rounded-pill me-1';
+    nameBtn.textContent = 'なまえを出す';
+    nameBtn.addEventListener('click', () => {
+      const hidden = document.body.classList.toggle('names-hidden');
+      nameBtn.textContent = hidden ? 'なまえを出す' : 'なまえを伏せる';
+    });
+    btn.parentNode.insertBefore(nameBtn, btn);
+  } else if (!on && nameBtn) {
+    nameBtn.remove();
+  }
+
+  // 全画面表示。ブラウザが断ることがあるので、失敗しても提示モード自体は続ける。
+  try {
+    if (on && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else if (!on && document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    }
+  } catch (e) { /* GAS は iframe の中なので許可されないことがある */ }
+
+  announce(on ? '提示モードにしました。なまえは伏せています。' : '提示モードをやめました。');
+}
+
+/**
+ * [機能] いま見えている画面を印刷する
+ * 印刷用のスタイル（css.html の @media print）が当たり、
+ * ナビ・フッター・ボタン・タイマーは出ません。
+ */
+function printCurrentView() {
+  window.print();
+}
+
+/**
+ * [機能] 画面の変化を読み上げてもらう
+ * 目で追えない人にも「保存できた」「エラーになった」が伝わるようにします。
+ */
+function announce(message, isError) {
+  const el = document.getElementById(isError ? 'a11y-alert' : 'a11y-status');
+  if (!el) return;
+  // 同じ文言が続くと読み上げられないので、一度空にしてから入れる
+  el.textContent = '';
+  setTimeout(() => { el.textContent = message; }, 50);
+}
+
 /**
  * [機能] 設定モーダル（連携設定など）
  */
-function toggleSettings() { 
+function toggleSettings() {
   Swal.fire({
     title: '設定',
     html: `

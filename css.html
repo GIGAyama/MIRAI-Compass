@@ -6,43 +6,91 @@
    * 学校のイメージカラーに合わせてここを変更できます。
    */
 :root {
-  /* ブランドカラー (Google Material Colors準拠) */
-  --color-primary: #1a73e8; /* メインカラー（青） */
-  --color-success: #34a853; /* 完了・成功（緑） */
-  --color-warning: #fbbc04; /* 注意・進行中（黄） */
-  --color-danger: #ea4335;  /* SOS・警告（赤） */
-  --color-info: #4285f4;    /* 情報・集中（水色） */
-  
+  /* ブランドカラー (Google Material Colors準拠)
+     ★ 明るい色をそのまま文字色に使わない。「面（帯・ボタンの地）」用と
+        「文字・アイコン」用の2段階を用意している。
+        面用をそのまま文字に使うと、Chromebook の安い液晶では読めなくなる。 */
+  --color-primary: #1a73e8; /* 面用：メインカラー（青） */
+  --color-success: #34a853; /* 面用：完了・成功（緑） */
+  --color-warning: #fbbc04; /* 面用：注意・進行中（黄） */
+  --color-danger: #ea4335;  /* 面用：SOS・警告（赤） */
+  --color-info: #4285f4;    /* 面用：情報・集中（水色） */
+
+  /* 文字・アイコン用（--bg-body #f0f2f5 の上で 4.5:1 以上を確保した濃さ）
+     色相は変えていない。1〜2段濃くしただけなので、色の印象はほとんど変わらない。 */
+  --color-primary-d: #0a58ca; /* 5.74 */
+  --color-success-d: #146c43; /* 5.74 */
+  --color-danger-d:  #b02a37; /* 5.09 */
+  --color-info-d:    #087990; /* 4.53 */
+  --color-warning-d: #664d03; /* 8.55 （黄は文字にできないので、かなり濃くする） */
+
   /* 背景色とテキスト色 */
   --bg-body: #f0f2f5;       /* アプリ全体の背景色 */
   --bg-card: #ffffff;       /* カードの背景色 */
   --bg-modal: #ffffff;      /* モーダルの背景色 */
   --bg-input: #ffffff;      /* 入力欄の背景色 */
-  
+
   --text-main: #3c4043;     /* 基本文字色 */
-  --text-muted: #6c757d;    /* 薄い文字色 */
-  
+  /* #6c757d は --bg-body の上で 4.18 しかなく、基準に届いていなかった。
+     案内文・空状態・バッジなど「いちばん困っている人に向けた文」に
+     使われている色なので、ここを直すのが効く。 */
+  --text-muted: #5c636a;    /* 薄い文字色（5.42） */
+
   /* その他デザイン要素 */
   --border-color: #dee2e6;
   --shadow-sm: 0 .125rem .25rem rgba(0,0,0,.075);
   --bg-mytask: #fbf5ff;     /* 「じぶんの課題」の背景色（薄紫） */
+
+  /* セーフエリア（ノッチ・ホームバー・丸角） */
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+
+  /* 文字サイズ。画面幅に応じて伸び縮みさせ、メディアクエリを何段も書かない。
+     320px のスマホでも電子黒板でも、それぞれ妥当な大きさになる。 */
+  --fs-body:  clamp(15px, 1.6vw + 10px, 18px);
+  --fs-lead:  clamp(18px, 2.2vw + 12px, 24px);
+  --fs-title: clamp(22px, 3.2vw + 14px, 40px);
+  --fs-hero:  clamp(40px, 9vw, 120px);
 }
+
+/* 児童用アプリなので配色を固定する（端末のダークモードで勝手に反転させない） */
+:root { color-scheme: light; }
 
 /* =========================================
    2. 基本スタイル & レイアウト (Base Styles)
    ========================================= */
 body {
-  font-family: "Zen Maru Gothic", sans-serif; /* 子供に読みやすい丸ゴシック体 */
+  /* 学校のフィルタリングで Zen Maru Gothic が届かなくても字が崩れないよう、
+     端末側の日本語フォントを必ず後ろに並べる。届かないときは字の形が
+     変わるだけで、アプリは同じように動く。 */
+  font-family: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", "Yu Gothic UI",
+               "Hiragino Kaku Gothic ProN", "Noto Sans JP", system-ui, sans-serif;
   color: var(--text-main);
   background-color: var(--bg-body);
   transition: background-color 0.3s ease, color 0.3s ease;
-  
-  /* アプリライクなフルスクリーンレイアウト設定 */
-  height: 100vh;
+
+  font-size: var(--fs-body);
+
+  /* アプリライクなフルスクリーンレイアウト設定
+     100vh はモバイルのアドレスバー分だけはみ出すので dvh を使う。 */
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden; /* 画面全体のスクロールを禁止（内部でスクロールさせる） */
+
+  /* 横向きにしたときノッチ側が欠けないようにする */
+  padding-left: var(--safe-l);
+  padding-right: var(--safe-r);
+
+  touch-action: manipulation; /* ダブルタップ拡大の300ms遅延を消す */
 }
+/* dvh を知らない古い端末向け。dvh を先に書き、@supports で受ける。 */
+@supports not (height: 100dvh) {
+  body { height: 100vh; }
+}
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
 /* ルビ（ふりがな）の調整 */
 ruby {
@@ -50,14 +98,33 @@ ruby {
 }
 rt {
   font-size: 0.6em;
-  color: var(--text-muted);
+  /* ★ 色を決め打ちしない。
+     以前は var(--text-muted)（#6c757d）固定だったため、青いボタンの上で
+     コントラスト比 1.04 になり、ほとんど見えなかった。
+     ふりがなが要るのは低学年の児童なので、いちばん読めなくて困る人が
+     いちばん読めない形になっていた。
+     白地での既定値だけをここで決め、色のついた面では親の色を継がせる。 */
+  color: #5f6368;
 }
+/* 色のついた面（ボタン・バッジ・帯・白抜き文字）では、まとめて継がせる。
+   1か所ずつ潰すと必ずどこかが漏れる。 */
+button rt,
+.btn rt,
+.badge rt,
+.nav-link rt,
+[class*="bg-"] rt,
+[class*="btn-"] rt,
+[class*="text-white"] rt,
+.alert rt,
+.heatmap-cell rt,
+.skill-mini-badge rt { color: inherit; }
 
 /* ヘッダー (ナビゲーションバー) */
 nav.navbar {
   flex-shrink: 0; /* 縮小させない */
   margin-bottom: 0 !important;
   z-index: 1030;
+  padding-top: var(--safe-t); /* ノッチの下に潜り込まないようにする */
 }
 
 /* メインコンテンツエリア */
@@ -66,11 +133,13 @@ main.container {
   width: 100%;
   max-width: 960px;
   padding-top: 1rem;
-  padding-bottom: 80px; /* フッターの高さ分 + 余白 */
+  /* フッターの高さ分 + 余白。iPhone のホームバーの分も足す。 */
+  padding-bottom: calc(80px + var(--safe-b));
   display: flex;
   flex-direction: column;
   overflow-y: auto;     /* コンテンツが多い時だけスクロール */
   -webkit-overflow-scrolling: touch; /* スマホでのスクロールを滑らかに */
+  overscroll-behavior: contain; /* 引っぱり更新の暴発を防ぐ */
 }
 
 /* 先生モード時の全幅表示設定 */
@@ -97,7 +166,10 @@ footer {
   background-color: var(--bg-card);
   border-top: 1px solid var(--border-color);
   z-index: 1040;
-  padding-bottom: env(safe-area-inset-bottom); /* iPhone X以降の下部バー対応 */
+  /* iPhone X以降の下部バー対応。左右のノッチ分も足す。 */
+  padding-bottom: var(--safe-b);
+  padding-left: var(--safe-l);
+  padding-right: var(--safe-r);
 }
 
 /* Bootstrapデフォルトの上書き */
@@ -234,6 +306,12 @@ footer {
 /* 計画作成画面 (Drag & Drop) */
 .plan-drop-zone-v {
   transition: background-color 0.2s;
+}
+/* 計画づくりの2カラム。以前は style="height: calc(100vh - 150px)" を
+   直書きしていたが、100vh はモバイルのアドレスバー分だけはみ出す。 */
+.plan-columns { height: calc(100dvh - 150px); }
+@supports not (height: 100dvh) {
+  .plan-columns { height: calc(100vh - 150px); }
 }
 .sortable-ghost { /* ドラッグ中の半透明表示 */
   opacity: 0.4;
@@ -472,5 +550,234 @@ footer {
   z-index: 1000;
   pointer-events: none;
   margin-bottom: 4px;
+}
+
+/* =========================================
+   6. ライブラリの既定色の上書き（コントラスト）
+   =========================================
+   ★ アプリ固有の配色を疑う前に、フレームワークの既定色を疑うこと。
+
+   このアプリは --color-primary: #1a73e8 を定義していたが、
+   Bootstrap の .text-primary / .btn-info などは上書きしていなかった。
+   そのため画面に実際に出ていたのは Bootstrap の既定色のほうだった。
+
+   白地ではなく、このアプリの地色 --bg-body (#f0f2f5) の上での実測値:
+     .text-primary        #0d6efd  4.01  → #0a58ca  5.74
+     .text-secondary      #6c757d  4.18  → #5c636a  5.42
+     .btn-outline-success #198754  4.04  → #146c43  5.74
+     .btn-info の白抜き   白/#0dcaf0 1.96 → 白/#087990 5.08
+     .swal2-close         #ccc     1.61  → #5c636a  5.42（白地では 5.99）
+   ========================================= */
+/* ⚠️ --bs-*-text-emphasis は【上書きしない】。
+   これは Bootstrap が「淡い地（.alert-info など）の上に載せる文字」用に
+   用意している変数で、既定値がすでに十分濃い（#055160 など）。
+   ここを --color-*-d で上書きしたところ、.alert-info の文字が
+   淡い水色の地の上で 4.34 に【悪化した】。実測して気づいた。
+   濃くする一括置換は、こういう形で別の場所を壊す。 */
+.text-primary   { color: var(--color-primary-d) !important; }
+.text-success   { color: var(--color-success-d) !important; }
+.text-danger    { color: var(--color-danger-d)  !important; }
+.text-info      { color: var(--color-info-d)    !important; }
+.text-warning   { color: var(--color-warning-d) !important; }
+.text-secondary { color: var(--text-muted) !important; }
+
+/* ★ 一括で濃くすると「濃い面の上に置いた薄い文字」まで濃くなり、逆に読めなくなる。
+   色のついた面・白抜き指定の中では、上の上書きを打ち消して継がせる。 */
+.btn-primary   .text-primary,   .btn-success .text-success,
+.btn-danger    .text-danger,    .btn-info    .text-info,
+.btn-warning   .text-warning,
+[class*="bg-primary"] .text-primary, [class*="bg-success"] .text-success,
+[class*="bg-danger"]  .text-danger,  [class*="bg-info"]    .text-info,
+.text-white .text-muted, .text-white .text-secondary,
+[class*="bg-primary"] .text-muted, [class*="bg-danger"] .text-muted,
+[class*="bg-success"] .text-muted, [class*="bg-info"]   .text-muted {
+  color: inherit !important;
+}
+
+/* 面としての色は据え置き、文字が載る側だけ濃くする */
+.btn-info {
+  --bs-btn-bg: var(--color-info-d);
+  --bs-btn-border-color: var(--color-info-d);
+  --bs-btn-hover-bg: #06657a;
+  --bs-btn-hover-border-color: #06657a;
+  --bs-btn-color: #fff;
+  --bs-btn-hover-color: #fff;
+}
+.btn-outline-info    { --bs-btn-color: var(--color-info-d);    --bs-btn-border-color: var(--color-info-d); }
+.btn-outline-primary { --bs-btn-color: var(--color-primary-d); --bs-btn-border-color: var(--color-primary-d); }
+.btn-outline-success { --bs-btn-color: var(--color-success-d); --bs-btn-border-color: var(--color-success-d); }
+.btn-outline-danger  { --bs-btn-color: var(--color-danger-d);  --bs-btn-border-color: var(--color-danger-d); }
+.btn-outline-secondary { --bs-btn-color: var(--text-muted);    --bs-btn-border-color: #adb5bd; }
+.btn-link { --bs-btn-color: var(--color-primary-d); --bs-btn-hover-color: #084298; }
+
+/* SweetAlert2 の × は既定が #ccc で、白地でも比 1.61 しかない */
+.swal2-close { color: var(--text-muted) !important; }
+.swal2-close:hover { color: var(--color-danger-d) !important; }
+
+/* =========================================
+   7. タップ領域 44px
+   =========================================
+   ★ ボタン自体を大きくして満たさない。
+     先生のビュー切替（LIVE／一覧／座席／まとめ／設計／進行）のように
+     詰めて組んであるツールバーで min-height を当てると折り返しが起き、
+     別の破綻を生む。疑似要素で当たり判定だけを広げる。
+   ========================================= */
+.btn, .nav-link, .btn-close, .page-link,
+footer a, .stamp-option, .edit-icon, .heatmap-cell-wrapper {
+  position: relative;
+}
+.btn::after, .nav-link::after, .btn-close::after, .page-link::after,
+footer a::after, .stamp-option::after, .edit-icon::after,
+.heatmap-cell-wrapper::after {
+  content: "";
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%; height: 100%;
+  min-width: 44px; min-height: 44px;
+  /* 見た目は変えない。当たり判定を広げるだけ。 */
+}
+/* すでに ::after を使っている箇所は、上の当たり判定で潰さない */
+.mini-task-block::after, .stamp-badge::after { min-width: 0; min-height: 0; }
+
+/* ボタン以外にも押せる要素がある。
+   ・計画から課題を外す × （<i class="bi bi-x">、18×18 しかなかった）
+   ・課題インデックスの表の見出しと行（37px / 34px しかなかった）
+   これらも指で押せる大きさにする。表の行は縦に伸ばし、
+   小さなアイコンは疑似要素で当たり判定だけを広げる。 */
+i[onclick], span[onclick] { position: relative; display: inline-block; }
+i[onclick]::after, span[onclick]::after {
+  content: "";
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%; height: 100%;
+  min-width: 44px; min-height: 44px;
+}
+th[onclick], td[onclick], .col[onclick], [onclick].cursor-pointer {
+  min-height: 44px;
+  vertical-align: middle;
+}
+.heatmap-table th[onclick] { height: 44px; }
+
+/* 「全○時間」の時数入力は width:40px 固定だった。指で押すには狭い。 */
+input.form-control[readonly][style*="width:40px"],
+input.form-control[readonly][style*="width: 40px"] { min-width: 44px; }
+
+/* ★ チェックボックスとラジオには疑似要素が使えない（input は ::after を持てない）。
+   囲みの <label> 側で高さを確保する。 */
+.form-check {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+.form-check .form-check-input { width: 1.4em; height: 1.4em; margin-top: 0; }
+.form-check .form-check-label { min-height: 44px; display: flex; align-items: center; padding-left: .25rem; }
+
+/* 入力欄・選択欄も指で押せる高さにする */
+.form-control, .form-select { min-height: 44px; }
+.form-control-sm, .form-select-sm { min-height: 44px; }
+
+/* =========================================
+   8. 操作と見え方の下ごしらえ
+   ========================================= */
+* { -webkit-tap-highlight-color: transparent; }
+.no-select { user-select: none; -webkit-user-select: none; }
+:focus-visible {
+  outline: 3px solid var(--color-primary-d);
+  outline-offset: 2px;
+}
+/* 座席表・計画づくりは指で動かす面なので、操作中に画面ごと動かない */
+.seating-canvas, .plan-drop-zone-v { touch-action: pan-y; }
+
+/* =========================================
+   9. 動きの配慮（感覚過敏・めまいへの配慮）
+   =========================================
+   ★ .01ms であって 0 ではない。
+     0 にすると animation-fill-mode: forwards が効かなくなり、
+     fadeIn 系を使っている要素が opacity: 0 のまま消える。
+     「動きを止める」つもりが「中身を消す」ことになる。
+   ========================================= */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* =========================================
+   10. ハイコントラストモード
+   =========================================
+   背景色が無効化されても「押せる」と分かるように枠を残す。
+   ========================================= */
+@media (forced-colors: active) {
+  .btn, .nav-link, .card, .form-control, .form-select {
+    border: 2px solid ButtonText;
+  }
+  .nav-tabs .nav-link.active { border-bottom: 4px solid Highlight; }
+  .heatmap-cell, .mini-task-block { border: 1px solid CanvasText; }
+  /* 色だけで意味を伝えている箇所は、形と文字で補っている（SOS/集中はラベル付き） */
+}
+
+/* =========================================
+   11. 提示モード（電子黒板・一斉授業）
+   =========================================
+   教室のうしろの席から読めることが要件。
+   先生が「大きく表示」を押すと body に .presentation が付く。
+   ========================================= */
+.presentation { font-size: 150%; }
+.presentation .btn { min-height: 64px; }
+.presentation .btn-sm { min-height: 56px; font-size: 1rem; }
+.presentation .card-title, .presentation h4, .presentation h5 { font-size: 1.6em; }
+.presentation .heatmap-cell { width: 44px; height: 44px; }
+.presentation .badge { font-size: .9em; }
+/* 提示モードでは児童名を既定で伏せる（個人情報を教室の外へ出さない）。
+   先生が「名前をみる」を押したときだけ表示する。 */
+.presentation.names-hidden .student-name,
+.presentation.names-hidden .seat-card .fw-bold,
+.presentation.names-hidden .gallery-card .fw-bold {
+  color: transparent !important;
+  text-shadow: 0 0 12px rgba(0,0,0,.55);
+}
+/* 大画面では余白を活かして主役を大きく */
+@media (min-width: 1600px) {
+  :root { --fs-hero: clamp(64px, 8vw, 160px); }
+}
+
+/* =========================================
+   12. 印刷（まとめ一覧・ポートフォリオを配る）
+   ========================================= */
+@media print {
+  @page { size: A4 portrait; margin: 10mm; }
+  body {
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    font-family: "BIZ UDPMincho", "Yu Mincho", serif;
+    font-size: 10.5pt; line-height: 1.5;
+    height: auto; overflow: visible; display: block;
+  }
+  main.container {
+    max-width: none; overflow: visible; height: auto;
+    padding: 0; display: block;
+  }
+  /* 画面のためだけにある要素は出さない。
+     あとから足した固定要素（タイマー・更新の帯）にも .no-print を付けてある。 */
+  .no-print, nav, footer, .btn, .nav-tabs, #loading,
+  #my-timer-widget, .timeline-container, .stamp-select-group { display: none !important; }
+  .card, .summary-table-container { box-shadow: none !important; border: 1px solid #999 !important; }
+  .page-break { break-before: page; }
+  table { break-inside: avoid; }
+  tr, .card, .gallery-card, .summary-table tr { break-inside: avoid; }
+  .summary-table th { position: static; }
+  a[href]::after { content: ""; }  /* URLを併記しない */
+  .summary-text-area { max-height: none !important; overflow: visible !important; }
+}
+/* 横長の表（まとめ一覧・ヒートマップ）は A4 縦に入りきらない。
+   印刷ダイアログで「横」を選んでもらう前提で、そのときに崩れないようにしておく。
+   手順は MANUAL.md の「印刷する」に書いてある。 */
+@media print and (orientation: landscape) {
+  .summary-table-container, .heatmap-table { width: 100%; }
+  .st-col-feedback { width: auto; }
 }
 </style>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1a73e8">
+  <meta name="color-scheme" content="light">
+  <title>みらいコンパス — インターネットにつながっていません</title>
+  <!--
+    この画面は「ネットにつながらず、アプリ本体も手元にない」ときに出ます。
+    なので、外部の資産にも JavaScript にも一切頼りません。
+    見た目はアプリと同じ配色・同じフォントにして、
+    「壊れた」と思わせないようにしています。
+    再読み込みは <a href> で行います（インライン onclick は CSP に引っかかるため）。
+  -->
+  <style>
+    :root {
+      --bg: #f0f2f5;
+      --card: #ffffff;
+      --primary: #0a58ca;
+      --text: #3c4043;
+      --muted: #5c636a;
+      --safe-b: env(safe-area-inset-bottom, 0px);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+    body {
+      min-height: 100dvh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+      padding-bottom: calc(24px + var(--safe-b));
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", "Yu Gothic UI",
+                   "Hiragino Kaku Gothic ProN", "Noto Sans JP", system-ui, sans-serif;
+      line-height: 1.8;
+      font-size: clamp(15px, 1.6vw + 10px, 18px);
+    }
+    @supports not (min-height: 100dvh) { body { min-height: 100vh; } }
+
+    .card {
+      background: var(--card);
+      border-radius: 20px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      padding: 32px 28px;
+      max-width: 480px;
+      width: 100%;
+      text-align: center;
+    }
+    .mark {
+      width: 88px; height: 88px; margin: 0 auto 16px;
+      border-radius: 50%;
+      background: #e3f2fd;
+      border: 4px solid #90caf9;
+      display: flex; align-items: center; justify-content: center;
+    }
+    /* コンパスの針。画像ファイルに頼らず、CSS だけで描く。 */
+    .needle {
+      width: 0; height: 0;
+      border-left: 7px solid transparent;
+      border-right: 7px solid transparent;
+      border-bottom: 30px solid #ffab91;
+      position: relative;
+    }
+    .needle::after {
+      content: ""; position: absolute; top: 30px; left: -7px;
+      width: 0; height: 0;
+      border-left: 7px solid transparent;
+      border-right: 7px solid transparent;
+      border-top: 30px solid #80deea;
+    }
+    h1 {
+      font-size: clamp(20px, 2.6vw + 12px, 26px);
+      color: var(--primary);
+      margin-bottom: 12px;
+    }
+    p { color: var(--muted); margin-bottom: 8px; }
+    .hint {
+      font-size: .85em;
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin: 18px 0;
+      text-align: left;
+      color: var(--muted);
+    }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 44px;               /* 指で押せる大きさ */
+      padding: 12px 32px;
+      border-radius: 999px;
+      background: var(--primary);
+      color: #fff;                    /* #0a58ca の上で 6.6:1 */
+      font-weight: bold;
+      text-decoration: none;
+      width: 100%;
+    }
+    .btn:focus-visible { outline: 3px solid #3c4043; outline-offset: 2px; }
+    footer { margin-top: 16px; font-size: .75em; color: var(--muted); }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        transition-duration: .01ms !important;
+      }
+    }
+    @media (forced-colors: active) {
+      .card, .btn { border: 2px solid ButtonText; }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark" role="img" aria-label="みらいコンパス">
+      <div class="needle"></div>
+    </div>
+
+    <h1>いま インターネットに つながっていません</h1>
+
+    <p>みらいコンパスは、みんなの<ruby>学習<rp>(</rp><rt>がくしゅう</rt><rp>)</rp></ruby>の<ruby>記録<rp>(</rp><rt>きろく</rt><rp>)</rp></ruby>をインターネットごしに<ruby>読<rp>(</rp><rt>よ</rt><rp>)</rp></ruby>みこみます。</p>
+
+    <div class="hint">
+      <strong>ためしてみること</strong><br>
+      ・Wi-Fi が つながっているか たしかめる<br>
+      ・すこし まってから もういちど ひらく<br>
+      ・それでも だめなときは 先生に つたえる
+    </div>
+
+    <a class="btn" href="./">もういちど ひらく</a>
+
+    <footer>&copy; 2026 みらいコンパス</footer>
+  </main>
+</body>
+</html>

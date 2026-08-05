@@ -1,0 +1,27 @@
+{
+  "repoName": "MIRAI-Compass",
+  "shellDir": "docs",
+
+  "appHtmlFiles": ["index.html"],
+  "shellHtmlFiles": ["docs/index.html", "docs/offline.html"],
+
+  "viewportFiles": ["index.html", "code.gs", "docs/index.html", "docs/offline.html"],
+
+  "styleFiles": ["css.html", "docs/index.html", "docs/offline.html"],
+
+  "sourceFiles": [
+    "code.gs",
+    "index.html",
+    "css.html",
+    "js_core.html",
+    "js_student.html",
+    "js_teacher.html",
+    "docs/index.html",
+    "docs/app.js",
+    "docs/install-hook.js",
+    "docs/sw.js",
+    "docs/offline.html"
+  ],
+
+  "generatedFiles": ["vendor_css.html", "vendor_icons.html", "vendor_js.html"]
+}

@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # vendor_*.html は node_modules から生成する。
+  # 版が上がったら npm run build を走らせ直す必要があるため、
+  # ここで更新に気づけるようにしておく。
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    # メジャー更新は自動で上げない（v5 絶対安全規則 6）
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"

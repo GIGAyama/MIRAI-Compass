@@ -1,0 +1,45 @@
+name: CI
+
+# ★ pull_request でも動かす。
+#   push: branches: [main] だけだと、PR の時点で落ちていることに気づけない。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: ライブラリを版どおりに入れる
+        run: npm ci
+
+      - name: 生成物を作り直す
+        run: npm run build
+
+      # 原本を直したのに npm run build を忘れて push した場合、
+      # ビルドも静的解析も通ってしまい、動かすまで気づけない。ここで止める。
+      - name: 生成物が原本と食い違っていないか
+        run: node tools/verify-generated.mjs
+
+      - name: 品質ゲート（GIGA Standard v5）
+        run: npm run check
+
+      # ★ 「0件でした」だけでは、検査が動いているのか
+      #   何も見ていないのか区別できない。わざと壊して落ちることを確かめる。
+      - name: 品質ゲートそのものが動くか（わざと壊す）
+        run: node scripts/check-project.mjs --self-test
+
+      - name: 中核ロジックのテスト
+        run: npm test

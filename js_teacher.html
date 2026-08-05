@@ -98,7 +98,11 @@ function renderTeacherView() {
             <button class="btn btn-sm ${appState.view.teacher === 'design' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('design')"><i class="bi bi-pencil-ruler me-1"></i>設計</button>
             <button class="btn btn-sm ${appState.view.teacher === 'control' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('control')">進行</button>
           </div>
-          <button class="btn btn-primary btn-sm rounded-pill px-3 shadow-sm" onclick="openUnitManagerModal()"><i class="bi bi-plus-circle me-1"></i>新規単元登録</button>
+          <!-- 印刷：まとめ一覧・ヒートマップを紙で配るときに使う。
+               印刷用スタイル（css.html の @media print）が当たり、
+               ナビ・フッター・ボタン・タイマーは出ない。 -->
+          <button class="btn btn-outline-secondary btn-sm rounded-pill px-3" onclick="printCurrentView()" aria-label="いまの画面を印刷する"><i class="bi bi-printer me-1" aria-hidden="true"></i>印刷</button>
+          <button class="btn btn-primary btn-sm rounded-pill px-3 shadow-sm" onclick="openUnitManagerModal()"><i class="bi bi-plus-circle me-1" aria-hidden="true"></i>新規単元登録</button>
         </div>
       </div>
       
@@ -777,8 +781,8 @@ function renderTeacherDesignView(container) {
           <span class="input-group-text">全</span>
           <input type="text" class="form-control text-center fw-bold" value="${totalHours}" style="width:50px;" readonly>
           <span class="input-group-text">時間</span>
-          <button class="btn btn-outline-secondary" onclick="changeUnitTotalHours(1)"><i class="bi bi-plus-lg"></i></button>
-          <button class="btn btn-outline-secondary" onclick="changeUnitTotalHours(-1)"><i class="bi bi-dash-lg"></i></button>
+          <button class="btn btn-outline-secondary" onclick="changeUnitTotalHours(1)"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
+          <button class="btn btn-outline-secondary" onclick="changeUnitTotalHours(-1)"><i class="bi bi-dash-lg" aria-hidden="true"></i></button>
         </div>
         <button class="btn btn-primary btn-sm rounded-pill px-3 shadow-sm" onclick="syncUnitToPassport()" title="みらいパスポートでワークシートを作成">
           <i class="bi bi-rocket-takeoff-fill me-2"></i>WS作成連携
@@ -790,7 +794,7 @@ function renderTeacherDesignView(container) {
       <div class="col-4 h-100 p-0 d-flex flex-column border-end bg-white rounded-start overflow-hidden">
         <div class="p-2 border-bottom fw-bold text-muted d-flex justify-content-between align-items-center flex-shrink-0">
           <span><i class="bi bi-inbox me-2"></i>未配置・その他</span>
-          <button class="btn btn-outline-primary btn-sm rounded-circle" onclick="openTeacherTaskEditModal('NEW')"><i class="bi bi-plus"></i></button>
+          <button class="btn btn-outline-primary btn-sm rounded-circle" onclick="openTeacherTaskEditModal('NEW')"><i class="bi bi-plus" aria-hidden="true"></i></button>
         </div>
         <div id="teacher-pool-container" class="flex-grow-1 overflow-auto p-2 teacher-design-dropzone" data-step="">
           ${taskPoolHtml}
@@ -1131,7 +1135,7 @@ function openUnitManagerModal() {
                     <div class="d-flex justify-content-between align-items-end mb-2">
                       <p class="small text-muted mb-0">この呪文（プロンプト）をAIに送信してください。<br>内容は自由に編集・保存できます。</p>
                       <div class="btn-group btn-group-sm">
-                        <button class="btn btn-outline-secondary" onclick="resetCustomPrompt()" title="初期値に戻す"><i class="bi bi-arrow-counterclockwise"></i></button>
+                        <button class="btn btn-outline-secondary" onclick="resetCustomPrompt()" title="初期値に戻す"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></button>
                         <button class="btn btn-outline-primary" onclick="saveCustomPrompt()" title="この内容を保存"><i class="bi bi-save"></i> 保存</button>
                       </div>
                     </div>
