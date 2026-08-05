@@ -6,7 +6,14 @@
     ページのタイトルや、スマホで見た時の表示倍率などを設定しています。
   -->
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- viewport-fit=cover … ノッチ／ホームバー領域まで背景を伸ばすために必須。
+       ⚠️ GAS は画面を iframe で包むため、この指定は index.html と code.gs の
+          addMetaTag の【両方】に要る。片方だけでは安全領域が使えるようにならない。
+       user-scalable=no と maximum-scale は書かない。誤ズーム防止より、
+       見えづらい子が拡大できない害のほうが大きい。誤ズームは
+       touch-action: manipulation で十分に防げる（css.html）。 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
   <meta name="description" content="自由進度学習支援アプリケーション">
   <meta name="theme-color" content="#1a73e8">
   <meta name="mobile-web-app-capable" content="yes">
@@ -61,7 +68,7 @@
     === ローディング画面 ===
     データ読み込み中に表示される、コンパスがくるくる回る画面です。
   -->
-  <div id="loading" class="position-fixed w-100 h-100 top-0 start-0 d-flex flex-column justify-content-center align-items-center bg-white" style="z-index: 9999;">
+  <div id="loading" class="no-print position-fixed w-100 h-100 top-0 start-0 d-flex flex-column justify-content-center align-items-center bg-white" style="z-index: 9999;">
     <div class="compass-loader mb-3">
       <div class="compass-needle"></div>
     </div>
@@ -91,8 +98,15 @@
           <i class="bi bi-person-fill me-1"></i>児童モードへ戻る
         </button>
 
+        <!-- 提示モード：電子黒板に映して一斉授業をするときに押す。
+             教室のうしろの席から読める大きさにし、児童名は既定で伏せる。 -->
+        <button class="btn btn-outline-secondary btn-sm rounded-pill border-0 d-none me-1" id="btn-presentation" type="button"
+                onclick="togglePresentationMode()" aria-label="大きく表示（提示モード）" aria-pressed="false">
+          <i class="bi bi-easel-fill fs-5" aria-hidden="true"></i>
+        </button>
+
         <button class="btn btn-outline-secondary btn-sm rounded-pill border-0 d-none" id="btn-settings" type="button" onclick="toggleSettings()" aria-label="設定">
-          <i class="bi bi-gear-fill fs-5"></i>
+          <i class="bi bi-gear-fill fs-5" aria-hidden="true"></i>
         </button>
       </div>
     </div>
@@ -112,12 +126,23 @@
     <div id="app-container"></div>
   </main>
 
+  <!--
+    === 読み上げ用の通知エリア ===
+    保存できた・エラーになったといった画面の変化を、目で追えない人にも伝えます。
+    見た目には出ません（.visually-hidden）。announce() から書き込みます。
+  -->
+  <div id="a11y-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div id="a11y-alert" class="visually-hidden" role="alert" aria-live="assertive" aria-atomic="true"></div>
+
   <!-- 
     === フッター (画面下部) ===
   -->
-  <footer class="text-center text-muted py-2 border-top transition-bg d-flex justify-content-center align-items-center gap-3">
-    <small>&copy; 2026 みらいコンパス <a href="https://note.com/cute_borage86" target="_blank" class="text-decoration-none text-muted">GIGA山</a></small>
-    <a href="#" class="text-decoration-none text-muted small" style="font-size:0.75rem;" onclick="attemptTeacherLogin(); return false;">教員用ログイン</a>
+  <!-- フッターのリンクは既定で 49×16px / 84×18px しかなかった。
+       css.html の footer a::after で当たり判定だけを 44px に広げている
+       （見た目は変えず、指で押せるようにするため）。 -->
+  <footer class="no-print text-center text-muted py-2 border-top transition-bg d-flex justify-content-center align-items-center gap-3">
+    <small>&copy; 2026 みらいコンパス <a href="https://note.com/cute_borage86" target="_blank" rel="noopener" class="d-inline-block text-decoration-none text-muted">GIGA山</a></small>
+    <a href="#" class="d-inline-block text-decoration-none text-muted small" style="font-size:0.75rem;" onclick="attemptTeacherLogin(); return false;">教員用ログイン</a>
   </footer>
 
   <!--

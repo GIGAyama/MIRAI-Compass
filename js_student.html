@@ -293,7 +293,7 @@ function renderStudentDaily() {
           </button>
           
           <button class="btn btn-outline-primary btn-sm rounded-pill" onclick="setStudentViewMode('planning')"><i class="bi bi-calendar-range"></i> <ruby>計画<rt>けいかく</rt></ruby></button>
-          <button class="btn btn-outline-secondary btn-sm rounded-pill" onclick="renderPortfolioModal('${appState.user.name}')"><i class="bi bi-journal-text"></i></button>
+          <button class="btn btn-outline-secondary btn-sm rounded-pill" onclick="renderPortfolioModal('${appState.user.name}')" aria-label="ポートフォリオをひらく"><i class="bi bi-journal-text" aria-hidden="true"></i></button>
           <button class="btn btn-outline-success btn-sm rounded-pill" onclick="openDailyReflectionModal()"><i class="bi bi-pencil-square"></i> ふりかえり</button>
         </div>
       </div>
@@ -344,7 +344,7 @@ function createStudentTaskCard(t) {
   // Passportボタン
   let passportBtn = '';
   if (t.format !== 'teacher' && t.category !== 'マイタスク' && appState.passportUrl) {
-    passportBtn = `<button class="btn btn-primary rounded-pill px-3 btn-sm fw-bold me-1 shadow-sm" onclick="event.stopPropagation(); launchPassport('${t.taskId}')" title="みらいパスポートで学習する"><i class="bi bi-rocket-takeoff-fill"></i></button>`;
+    passportBtn = `<button class="btn btn-primary rounded-pill px-3 btn-sm fw-bold me-1 shadow-sm" onclick="event.stopPropagation(); launchPassport('${t.taskId}')" title="みらいパスポートで学習する"><i class="bi bi-rocket-takeoff-fill" aria-hidden="true"></i></button>`;
   }
 
   // アクションボタン（完了/途中/Passport）
@@ -606,13 +606,15 @@ function renderStudentPlanning() {
           <div class="input-group input-group-sm w-auto">
             <span class="input-group-text bg-white">全</span>
             <input type="text" class="form-control text-center fw-bold bg-white" value="${effectiveHours}" style="width:40px;" readonly>
-            <button class="btn btn-outline-secondary" onclick="changeStudentTotalHours(1)"><i class="bi bi-plus-lg"></i></button>
-            <button class="btn btn-outline-secondary" onclick="changeStudentTotalHours(-1)"><i class="bi bi-dash-lg"></i></button>
+            <button class="btn btn-outline-secondary" onclick="changeStudentTotalHours(1)"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
+            <button class="btn btn-outline-secondary" onclick="changeStudentTotalHours(-1)"><i class="bi bi-dash-lg" aria-hidden="true"></i></button>
           </div>
         </div>
         <button class="btn btn-primary rounded-pill px-4 shadow-sm" onclick="setStudentViewMode('daily')"><ruby>完了<rt>かんりょう</rt></ruby></button>
       </div>
-      <div class="row flex-grow-1" style="min-height:0; height: calc(100vh - 150px);">
+      <!-- 100vh はモバイルのアドレスバー分だけはみ出すので dvh を使う。
+           dvh を知らない古い端末では、下の @supports で 100vh に戻る。 -->
+      <div class="row flex-grow-1 plan-columns" style="min-height:0;">
         <!-- 左側：課題プール -->
         <div class="col-4 h-100 border-end bg-white rounded-start d-flex flex-column">
           <div class="small text-muted mb-2 flex-shrink-0 p-2 border-bottom">課題リスト</div>
@@ -1060,6 +1062,12 @@ function renderPortfolioModal(name, isTeacher = false) {
     didOpen: () => {
       // チャート描画
       const ctx = document.getElementById('skillRadarChart').getContext('2d');
+
+      // 高DPI端末での「ぼやけ」対策。CSS上の大きさと実際の描画ピクセル数を分ける。
+      // dpr を 2 で頭打ちにするのは、3倍端末で 9倍の面積を描くと
+      // メモリ4GBの Chromebook がタブごと落ちるため。2 あれば肉眼では十分きれい。
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
       new Chart(ctx, {
         type: 'radar',
         data: {
@@ -1083,7 +1091,10 @@ function renderPortfolioModal(name, isTeacher = false) {
             }
           },
           plugins: { legend: { display: false } },
-          maintainAspectRatio: false
+          maintainAspectRatio: false,
+          devicePixelRatio: dpr,
+          // 画面回転・分割画面・電子黒板への出力切替に追従させる
+          responsive: true
         }
       });
     }
@@ -1154,10 +1165,10 @@ function renderMyTimer() {
   if (document.getElementById('my-timer-widget')) return;
   
   const timerHtml = `
-    <div id="my-timer-widget" class="card shadow rounded-4 bg-white" style="position:fixed; bottom:20px; right:20px; width:180px; z-index:1050; border:1px solid #ddd;">
+    <div id="my-timer-widget" class="no-print card shadow rounded-4 bg-white" style="position:fixed; bottom:20px; right:20px; width:180px; z-index:1050; border:1px solid #ddd;">
       <div class="card-header bg-light border-0 py-1 d-flex justify-content-between align-items-center" style="cursor:move;" onmousedown="dragElement(document.getElementById('my-timer-widget'))">
         <small class="fw-bold text-muted"><i class="bi bi-clock me-1"></i>Timer</small>
-        <button type="button" class="btn-close btn-close-sm" aria-label="Close" onclick="document.getElementById('my-timer-widget').classList.toggle('d-none')"></button>
+        <button type="button" class="btn-close btn-close-sm" aria-label="タイマーを閉じる" onclick="document.getElementById('my-timer-widget').classList.toggle('d-none')"></button>
       </div>
       <div class="card-body p-2 text-center">
         <div class="display-5 fw-bold mb-2" id="timer-display" style="font-family:monospace;">00:00</div>
@@ -1175,7 +1186,7 @@ function renderMyTimer() {
         </div>
       </div>
     </div>
-    <button id="timer-launcher" class="btn btn-primary rounded-circle shadow" style="position:fixed; bottom:20px; right:20px; width:50px; height:50px; z-index:1040;" onclick="document.getElementById('my-timer-widget').classList.remove('d-none');">
+    <button id="timer-launcher" class="no-print btn btn-primary rounded-circle shadow" style="position:fixed; bottom:20px; right:20px; width:50px; height:50px; z-index:1040;" aria-label="タイマーをひらく" onclick="document.getElementById('my-timer-widget').classList.remove('d-none');">
       <i class="bi bi-stopwatch fs-4"></i>
     </button>
   `;

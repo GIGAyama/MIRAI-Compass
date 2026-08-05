@@ -73,7 +73,13 @@ function doGet(e) {
     template.mode = 'student'; // デフォルトモード
     
     return template.evaluate()
-      .addMetaTag('viewport', 'width=device-width, initial-scale=1.0')
+      // ⚠️ ここは index.html の <meta name="viewport"> と【両方】直す必要がある。
+      //    addMetaTag はサーバー側の処理なので、index.html だけ直しても
+      //    GAS が返す画面には反映されない（逆に、index.html を手元で
+      //    組み立てただけではこちらが再現されない）。
+      //    viewport-fit=cover が無いと、iPad のノッチ・ホームバーの領域に
+      //    背景が伸びず、safe-area-inset も 0 のままになる。
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1.0, viewport-fit=cover')
       .setTitle(APP_TITLE)
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
       .setFaviconUrl('https://drive.google.com/uc?id=1zzJYaALAtpAVIkEG_k5oGoVQu0hIPS7G&.png');
