@@ -31,10 +31,12 @@ function attemptTeacherLogin() {
         google.script.run
           .withSuccessHandler(res => {
             if (res.authenticated) {
-              resolve(true); 
+              // 認証成功時にサーバーが発行したトークンを保持する。
+              appState.teacherToken = res.token || "";
+              resolve(true);
             } else {
               Swal.showValidationMessage('パスワードが違います');
-              resolve(false); 
+              resolve(false);
             }
           })
           .withFailureHandler(e => { Swal.showValidationMessage(e.message); resolve(false); })
@@ -42,11 +44,19 @@ function attemptTeacherLogin() {
       });
     }
   }).then((result) => {
-    if (result.isConfirmed) {
+    if (result.isConfirmed && appState.teacherToken) {
       switchMode('teacher'); // コア機能でモード切り替え
       showToast('success', '先生モードでログインしました');
     }
   });
+}
+
+// 先生専用のサーバー呼び出し。トークンを第1引数として自動付与する。
+function runTeacher(fnName, args, onSuccess, onFailure) {
+  var r = google.script.run
+    .withSuccessHandler(onSuccess || function(){})
+    .withFailureHandler(onFailure || handleError);
+  r[fnName].apply(r, [appState.teacherToken].concat(args || []));
 }
 
 /**
@@ -61,9 +71,8 @@ function changePasswordPrompt() {
     confirmButtonText: '変更'
   }).then(r => {
     if (r.isConfirmed && r.value) {
-      google.script.run
-        .withSuccessHandler(() => Swal.fire('完了', 'パスワードを変更しました', 'success'))
-        .changeTeacherPassword(r.value);
+      runTeacher('changeTeacherPassword', [r.value],
+        () => Swal.fire('完了', 'パスワードを変更しました', 'success'));
     }
   });
 }
@@ -81,7 +90,7 @@ function renderTeacherView() {
   // クラス切り替えタブの生成
   const classes = ['All', ...dataStore.classList];
   const tabsHtml = classes.map(c => 
-    `<li class="nav-item"><a class="nav-link ${appState.view.teacherClassId === c ? 'active fw-bold' : ''}" href="#" onclick="setTeacherClass('${c}')">${c === 'All' ? '全員' : c}</a></li>`
+    `<li class="nav-item"><a class="nav-link ${appState.view.teacherClassId === c ? 'active fw-bold' : ''}" href="#" onclick="setTeacherClass('${escJs(c)}')">${c === 'All' ? '全員' : escapeHtml(c)}</a></li>`
   ).join('');
 
   container.innerHTML = `
@@ -171,8 +180,29 @@ function renderTeacherDashboardContent() {
  * [データ処理] 表示対象の生徒データを抽出
  */
 function getFilteredStudents() {
-  if (appState.view.teacherClassId === 'All') return dataStore.liveStatus;
-  return dataStore.liveStatus.filter(s => s.classId === appState.view.teacherClassId);
+  const classId = appState.view.teacherClassId;
+  const live = Array.isArray(dataStore.liveStatus) ? dataStore.liveStatus : [];
+  // dataStore.liveStatus への参照をそのまま返さない（呼び出し側の sort 等で元データを壊さないため）
+  const base = (classId === 'All') ? live.slice() : live.filter(s => s.classId === classId);
+
+  // 名簿（在籍中）にいるがまだ一度もログインしていない児童も一覧に出す。
+  // liveStatus に無い在籍児童を、待機状態として補う。
+  const roster = Array.isArray(dataStore.roster) ? dataStore.roster : [];
+  const seen = new Set(base.map(s => s.name));
+  roster.forEach(r => {
+    if (!r || r.isActive === false || !r.name) return;
+    if (classId !== 'All' && r.classId !== classId) return;
+    if (seen.has(r.name)) return;
+    seen.add(r.name);
+    base.push({ name: r.name, classId: r.classId, number: r.number, mode: '通常', task: '-' });
+  });
+  return base;
+}
+
+// [まとめビュー] 一括保存の pf-N と行を必ず同じ並びにするため、
+// 描画・保存の両方でこの1つの並び順を使う（クラス絞り込み時のズレを防ぐ）。
+function getSummaryStudentsSorted() {
+  return [...getFilteredStudents()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
 /**
@@ -202,7 +232,7 @@ function updateLiveViews() {
         
         // テキスト更新
         const taskEl = card.querySelector('.task-text');
-        if (taskEl) taskEl.innerHTML = isOtherUnit ? '<span class="small text-secondary">他単元を学習中</span>' : (s.task || '-');
+        if (taskEl) taskEl.innerHTML = isOtherUnit ? '<span class="small text-secondary">他単元を学習中</span>' : escapeHtml(s.task || '-');
         
         const badgeEl = card.querySelector('.mode-badge');
         if (badgeEl) badgeEl.textContent = s.mode || '通常';
@@ -215,7 +245,8 @@ function updateLiveViews() {
     const canvas = document.getElementById('seating-canvas');
     if (canvas) {
       students.forEach(s => {
-        const card = canvas.querySelector(`.seat-card[data-name="${s.name}"]`);
+        const nameSel = (window.CSS && CSS.escape) ? CSS.escape(s.name) : String(s.name).replace(/["\\\]]/g, '\\$&');
+        const card = canvas.querySelector(`.seat-card[data-name="${nameSel}"]`);
         if (card) {
           const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
           const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
@@ -249,17 +280,17 @@ function renderLiveCards(container, students) {
     container.innerHTML = `<div class="row row-cols-2 row-cols-md-4 row-cols-lg-5 g-3">${students.map(s => {
       const isOtherUnit = s.currentUnitId && s.currentUnitId !== appState.unit.id;
       const opacity = isOtherUnit ? '0.5' : '1';
-      const taskDisplay = isOtherUnit ? '<span class="small text-secondary">他単元を学習中</span>' : (s.task || '-');
+      const taskDisplay = isOtherUnit ? '<span class="small text-secondary">他単元を学習中</span>' : escapeHtml(s.task || '-');
       const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
       const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
-      
+
       return `
       <div class="col">
-        <div id="live-card-${s.name}" class="card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}" style="opacity: ${opacity}">
-          <div class="fw-bold text-truncate mb-2">${s.name}</div>
+        <div id="live-card-${escapeHtml(s.name)}" class="card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}" style="opacity: ${opacity}">
+          <div class="fw-bold text-truncate mb-2">${escapeHtml(s.name)}</div>
           <i class="bi bi-person-circle fs-1 my-2 ${isSos ? 'text-danger' : (isFocus ? 'text-info' : 'text-secondary')}"></i>
           <div class="small text-muted text-truncate task-text">${taskDisplay}</div>
-          <div class="badge bg-light text-muted mt-1 fw-normal mode-badge">${s.mode || '通常'}</div>
+          <div class="badge bg-light text-muted mt-1 fw-normal mode-badge">${escapeHtml(s.mode || '通常')}</div>
         </div>
       </div>`;
     }).join('')}</div>`;
@@ -277,7 +308,7 @@ function renderHeatmap(container, students) {
   const studentNames = students.map(s => s.name).sort();
   if (studentNames.length === 0) { container.innerHTML = `<div class="text-center p-5">生徒データなし</div>`; return; }
 
-  let h = `<div class="table-responsive mb-4"><table class="table table-borderless heatmap-table"><thead><tr><th style="min-width:100px;text-align:left">名前</th>${currentTasks.map((t, i) => `<th title="${t.title}" onclick="showTeacherTaskDetailSimple('${t.taskId}')">${t.step ? t.step.replace(/[^0-9]/g, '') : i + 1}</th>`).join('')}</tr></thead><tbody>`;
+  let h = `<div class="table-responsive mb-4"><table class="table table-borderless heatmap-table"><thead><tr><th style="min-width:100px;text-align:left">名前</th>${currentTasks.map((t, i) => `<th role="button" tabindex="0" title="${escapeHtml(t.title)}" onclick="showTeacherTaskDetailSimple('${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); showTeacherTaskDetailSimple('${escJs(t.taskId)}');}">${t.step ? t.step.replace(/[^0-9]/g, '') : i + 1}</th>`).join('')}</tr></thead><tbody>`;
   
   studentNames.forEach(n => {
     const st = dataStore.liveStatus.find(d => d.name === n);
@@ -286,7 +317,7 @@ function renderHeatmap(container, students) {
     const ic = isSos ? '<i class="bi bi-exclamation-circle-fill text-danger ms-1 animate__animated animate__flash"></i>' : (isFocus ? '<i class="bi bi-lightning-fill text-info ms-1"></i>' : '');
     
     // 生徒名クリックでポートフォリオ表示
-    h += `<tr><td class="text-start fw-bold text-truncate" style="max-width:120px;cursor:pointer;text-decoration:underline" onclick="renderPortfolioModal('${n}', true)">${n}${ic}</td>`;
+    h += `<tr><td class="text-start fw-bold text-truncate" role="button" tabindex="0" style="max-width:120px;cursor:pointer;text-decoration:underline" onclick="renderPortfolioModal('${escJs(n)}', true)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); renderPortfolioModal('${escJs(n)}', true);}">${escapeHtml(n)}${ic}</td>`;
     
     currentTasks.forEach(t => {
       const p = (dataStore.clsProgress[n] && dataStore.clsProgress[n][t.taskId]) || {};
@@ -300,13 +331,13 @@ function renderHeatmap(container, students) {
       
       if (stamp) { if(stamp==='check') icon='✅'; if(stamp==='good') icon='👍'; if(stamp==='great') icon='💮'; if(stamp==='support') icon='🚩'; }
       
-      h += `<td><div class="heatmap-cell-wrapper" onclick="showStudentTaskDetail('${n}', '${t.taskId}')"><div class="heatmap-cell ${cls}" title="${t.title}">${icon}</div></div></td>`;
+      h += `<td><div class="heatmap-cell-wrapper" role="button" tabindex="0" onclick="showStudentTaskDetail('${escJs(n)}', '${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); showStudentTaskDetail('${escJs(n)}', '${escJs(t.taskId)}');}"><div class="heatmap-cell ${cls}" title="${escapeHtml(t.title)}">${icon}</div></div></td>`;
     });
     h += '</tr>';
   });
   
   // 課題の凡例
-  const indexHtml = `<div class="card bg-light border-0 rounded-4 p-3 mt-3"><h6 class="fw-bold text-muted mb-2"><i class="bi bi-list-ol me-2"></i>課題インデックス（${appState.unit.title}）</h6><div class="row row-cols-1 row-cols-md-2 g-2 small">${currentTasks.map((t, i) => `<div class="col" style="cursor:pointer" onclick="showTeacherTaskDetailSimple('${t.taskId}')"><span class="badge bg-secondary me-2" style="width:25px;">${t.step ? t.step.replace(/[^0-9]/g, '') : i + 1}</span><span class="badge bg-white text-dark border me-1">${t.category}</span><span class="text-truncate d-inline-block" style="max-width:200px;vertical-align:middle">${t.title}</span></div>`).join('')}</div></div>`;
+  const indexHtml = `<div class="card bg-light border-0 rounded-4 p-3 mt-3"><h6 class="fw-bold text-muted mb-2"><i class="bi bi-list-ol me-2"></i>課題インデックス（${escapeHtml(appState.unit.title)}）</h6><div class="row row-cols-1 row-cols-md-2 g-2 small">${currentTasks.map((t, i) => `<div class="col" style="cursor:pointer" onclick="showTeacherTaskDetailSimple('${escJs(t.taskId)}')"><span class="badge bg-secondary me-2" style="width:25px;">${t.step ? t.step.replace(/[^0-9]/g, '') : i + 1}</span><span class="badge bg-white text-dark border me-1">${escapeHtml(t.category)}</span><span class="text-truncate d-inline-block" style="max-width:200px;vertical-align:middle">${escapeHtml(t.title)}</span></div>`).join('')}</div></div>`;
   container.innerHTML = h + '</tbody></table></div>' + indexHtml;
 }
 
@@ -350,9 +381,9 @@ function renderSeatingView(container) {
     
     card.innerHTML = `
       <div class="card-body p-2 text-center" style="cursor: move;" onmousedown="startDragSeat(event, this)" ontouchstart="startDragSeat(event, this)">
-        <div class="fw-bold text-truncate small mb-1">${s.name}</div>
+        <div class="fw-bold text-truncate small mb-1">${escapeHtml(s.name)}</div>
         <i class="bi bi-person-circle fs-3 ${isSos ? 'text-danger' : (isFocus ? 'text-info' : 'text-secondary')}"></i>
-        <div class="x-small text-muted text-truncate mt-1">${s.task || '-'}</div>
+        <div class="x-small text-muted text-truncate mt-1">${escapeHtml(s.task || '-')}</div>
       </div>
     `;
     canvas.appendChild(card);
@@ -482,10 +513,10 @@ function saveSeating() {
     });
   });
   
-  google.script.run
-    .withSuccessHandler(() => {
+  runTeacher('saveSeatCoordinates', [coords],
+    () => {
       showToast('success', '座席配置を保存しました');
-      
+
       // [追加] ローカルのデータストアも更新して、タブ切り替え等でリセットされないようにする
       coords.forEach(c => {
         const student = dataStore.liveStatus.find(s => s.name === c.name);
@@ -500,16 +531,15 @@ function saveSeating() {
         btn.disabled = false;
         btn.innerHTML = originalText;
       }
-    })
-    .withFailureHandler((e) => {
+    },
+    (e) => {
       handleError(e);
       // [修正] エラー時もボタンを元に戻す
       if (btn) {
         btn.disabled = false;
         btn.innerHTML = originalText;
       }
-    })
-    .saveSeatCoordinates(coords);
+    });
 }
 
 /**
@@ -518,8 +548,8 @@ function saveSeating() {
 function renderSummaryListView(container) {
   container.className = "flex-grow-1 p-3 overflow-hidden d-flex flex-column"; 
   
-  const students = getFilteredStudents().sort((a,b) => a.name.localeCompare(b.name));
-  
+  const students = getSummaryStudentsSorted();
+
   if (students.length === 0) {
     container.innerHTML = `<div class="text-center p-5 text-muted">表示する生徒がいません</div>`;
     return;
@@ -555,7 +585,7 @@ function renderSummaryListView(container) {
     SKILL_DEFINITIONS.forEach(def => {
       const count = skillCounts[def.id];
       if (count > 0) {
-        skillBadges += `<span class="skill-mini-badge bg-${def.color}" title="${def.label}: ${count}回">${def.label.charAt(0)}${count}</span>`;
+        skillBadges += `<span class="skill-mini-badge bg-${def.color}" title="${escapeHtml(def.label)}: ${count}回">${escapeHtml(def.label.charAt(0))}${count}</span>`;
       }
     });
     if (!skillBadges) skillBadges = '<span class="text-muted small">-</span>';
@@ -566,8 +596,8 @@ function renderSummaryListView(container) {
       <tr>
         <td class="st-col-name text-center text-muted small align-middle">${index + 1}</td>
         <td class="st-col-name align-middle">
-          <div class="fw-bold text-primary" style="cursor:pointer;" onclick="renderPortfolioModal('${s.name}', true)">
-            ${s.name} <i class="bi bi-box-arrow-up-right small ms-1 text-muted"></i>
+          <div class="fw-bold text-primary" style="cursor:pointer;" onclick="renderPortfolioModal('${escJs(s.name)}', true)">
+            ${escapeHtml(s.name)} <i class="bi bi-box-arrow-up-right small ms-1 text-muted"></i>
           </div>
         </td>
         <td class="st-col-skills align-middle">
@@ -587,7 +617,7 @@ function renderSummaryListView(container) {
           </div>
           <div class="input-group input-group-sm">
             <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${escapeHtml(feedback)}">
-            <button id="btn-save-${uniqueId}" class="btn btn-primary" onclick="saveListFeedback('${s.name}', '${uniqueId}')">保存</button>
+            <button id="btn-save-${uniqueId}" class="btn btn-primary" onclick="saveListFeedback('${escJs(s.name)}', '${uniqueId}')">保存</button>
           </div>
         </td>
       </tr>`;
@@ -630,22 +660,21 @@ function saveListFeedback(studentName, uniqueId) {
   btn.innerHTML = '...';
   
   // サーバーへ保存
-  google.script.run
-    .withSuccessHandler(() => {
+  runTeacher('savePortfolioFeedback', [studentName, appState.unit.id, comment, stamp],
+    () => {
       showToast('success', '保存しました');
       btn.disabled = false;
       btn.innerHTML = originalText;
-    })
-    .withFailureHandler((e) => {
+    },
+    (e) => {
       handleError(e);
       btn.disabled = false;
       btn.innerHTML = originalText;
-    })
-    .savePortfolioFeedback(studentName, appState.unit.id, comment, stamp);
+    });
 }
 
 function saveAllListFeedbacks() {
-  const students = getFilteredStudents();
+  const students = getSummaryStudentsSorted();
   if (students.length === 0) return;
 
   const btn = document.getElementById('btn-bulk-save');
@@ -669,18 +698,17 @@ function saveAllListFeedbacks() {
     }
   });
 
-  google.script.run
-    .withSuccessHandler(() => {
+  runTeacher('saveAllPortfolios', [feedbackList],
+    () => {
       showToast('success', '全員分を保存しました');
       btn.disabled = false;
       btn.innerHTML = originalHtml;
-    })
-    .withFailureHandler((e) => {
+    },
+    (e) => {
       handleError(e);
       btn.disabled = false;
       btn.innerHTML = originalHtml;
-    })
-    .saveAllPortfolios(feedbackList);
+    });
 }
 
 // ==========================================
@@ -723,11 +751,11 @@ function renderTeacherDesignView(container) {
     const borderClass = getCategoryColorClass(t.category);
     const badge = t.format === 'teacher' ? '<span class="badge bg-info text-white me-1">先生</span>' : '';
     taskPoolHtml += `
-      <div class="card p-2 mb-2 shadow-sm task-draggable ${borderClass}" data-id="${t.taskId}" onclick="openTeacherTaskEditModal('${t.taskId}')" style="cursor:pointer">
-        <div class="small fw-bold">${badge}${t.title}</div>
+      <div class="card p-2 mb-2 shadow-sm task-draggable ${borderClass}" data-id="${escapeHtml(t.taskId)}" onclick="openTeacherTaskEditModal('${escJs(t.taskId)}')" style="cursor:pointer">
+        <div class="small fw-bold">${badge}${escapeHtml(t.title)}</div>
         <div class="d-flex justify-content-between align-items-center mt-1">
-          <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${t.category}</span>
-          <div class="x-small text-muted">${t.time}分</div>
+          <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${escapeHtml(t.category)}</span>
+          <div class="x-small text-muted">${escapeHtml(t.time)}分</div>
         </div>
       </div>`;
   });
@@ -743,13 +771,13 @@ function renderTeacherDesignView(container) {
       const borderClass = getCategoryColorClass(t.category);
       const badge = t.format === 'teacher' ? '<span class="badge bg-info text-white me-1">先生</span>' : '';
       hourTasksHtml += `
-        <div class="card p-2 mb-2 shadow-sm task-draggable ${borderClass}" data-id="${t.taskId}" onclick="openTeacherTaskEditModal('${t.taskId}')" style="cursor:pointer">
+        <div class="card p-2 mb-2 shadow-sm task-draggable ${borderClass}" data-id="${escapeHtml(t.taskId)}" onclick="openTeacherTaskEditModal('${escJs(t.taskId)}')" style="cursor:pointer">
           <div class="d-flex justify-content-between">
-            <span class="small fw-bold text-truncate">${badge}${t.title}</span>
+            <span class="small fw-bold text-truncate">${badge}${escapeHtml(t.title)}</span>
           </div>
           <div class="d-flex justify-content-between align-items-center mt-1">
-            <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${t.category}</span>
-            <div class="x-small text-muted text-end">${t.time}分</div>
+            <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${escapeHtml(t.category)}</span>
+            <div class="x-small text-muted text-end">${escapeHtml(t.time)}分</div>
           </div>
         </div>`;
     });
@@ -829,9 +857,7 @@ function renderTeacherDesignView(container) {
           task.step = newStep;
           renderTeacherDesignView(document.getElementById('t-area')); 
           // サーバー保存
-          google.script.run
-            .withFailureHandler(handleError)
-            .updateUnitTask(taskId, { step: newStep });
+          runTeacher('updateUnitTask', [taskId, { step: newStep }], null, handleError);
         }
       }
     });
@@ -867,16 +893,16 @@ function openTeacherTaskEditModal(taskId) {
       <div class="text-start">
         <div class="mb-3">
           <label class="form-label small fw-bold">タイトル</label>
-          <input id="ed-title" class="form-control" value="${task.title || ''}">
+          <input id="ed-title" class="form-control" value="${escapeHtml(task.title || '')}">
         </div>
         <div class="mb-3">
           <label class="form-label small fw-bold">説明文</label>
-          <textarea id="ed-desc" class="form-control" rows="2">${task.desc || task.description || ''}</textarea>
+          <textarea id="ed-desc" class="form-control" rows="2">${escapeHtml(task.desc || task.description || '')}</textarea>
         </div>
         <div class="row mb-3">
           <div class="col">
             <label class="form-label small fw-bold">目安時間(分)</label>
-            <input type="number" id="ed-time" class="form-control" value="${task.time || task.estimatedTime || 15}">
+            <input type="number" id="ed-time" class="form-control" value="${escapeHtml(task.time || task.estimatedTime || 15)}">
           </div>
           <div class="col">
             <label class="form-label small fw-bold">カテゴリ</label>
@@ -895,24 +921,24 @@ function openTeacherTaskEditModal(taskId) {
             <label class="form-label x-small text-muted mb-0">教科書・資料</label>
             <div class="input-group input-group-sm">
               <span class="input-group-text"><i class="bi bi-book"></i></span>
-              <input type="text" id="ed-tb-name" class="form-control" placeholder="名称 (例: P.24)" value="${tb.name||''}">
-              <input type="text" id="ed-tb-url" class="form-control" placeholder="URL (任意)" value="${tb.url||''}">
+              <input type="text" id="ed-tb-name" class="form-control" placeholder="名称 (例: P.24)" value="${escapeHtml(tb.name||'')}">
+              <input type="text" id="ed-tb-url" class="form-control" placeholder="URL (任意)" value="${escapeHtml(tb.url||'')}">
             </div>
           </div>
           <div class="mb-2">
             <label class="form-label x-small text-muted mb-0">タブレット・アプリ</label>
             <div class="input-group input-group-sm">
               <span class="input-group-text"><i class="bi bi-tablet"></i></span>
-              <input type="text" id="ed-tab-name" class="form-control" placeholder="名称 (例: NHK for School)" value="${tbTablet.name||''}">
-              <input type="text" id="ed-tab-url" class="form-control" placeholder="URL (任意)" value="${tbTablet.url||''}">
+              <input type="text" id="ed-tab-name" class="form-control" placeholder="名称 (例: NHK for School)" value="${escapeHtml(tbTablet.name||'')}">
+              <input type="text" id="ed-tab-url" class="form-control" placeholder="URL (任意)" value="${escapeHtml(tbTablet.url||'')}">
             </div>
           </div>
           <div class="mb-2">
             <label class="form-label x-small text-muted mb-0">プリント・その他</label>
             <div class="input-group input-group-sm">
               <span class="input-group-text"><i class="bi bi-file-earmark-text"></i></span>
-              <input type="text" id="ed-pr-name" class="form-control" placeholder="名称 (例: ワークシート)" value="${tbPrint.name||''}">
-              <input type="text" id="ed-pr-url" class="form-control" placeholder="URL (任意)" value="${tbPrint.url||''}">
+              <input type="text" id="ed-pr-name" class="form-control" placeholder="名称 (例: ワークシート)" value="${escapeHtml(tbPrint.name||'')}">
+              <input type="text" id="ed-pr-url" class="form-control" placeholder="URL (任意)" value="${escapeHtml(tbPrint.url||'')}">
             </div>
           </div>
         </div>
@@ -971,32 +997,27 @@ function openTeacherTaskEditModal(taskId) {
         renderTeacherDesignView(document.getElementById('t-area'));
         
         // サーバー通信 (バックグラウンド)
-        google.script.run
-          .withSuccessHandler(res => {
-             if(res.success) {
-               // 成功時: IDを正式なものに差し替え
-               const realId = res.taskId;
-               const targetIndex = dataStore.masterTasks.findIndex(t => t.taskId === tempId);
-               if (targetIndex > -1) {
-                   dataStore.masterTasks[targetIndex].taskId = realId;
-                   // IDが変わったので再描画してDOMのdata-idを更新しておく（次回の編集のため）
-                   renderTeacherDesignView(document.getElementById('t-area'));
-               }
-               showToast('success', '保存完了'); 
-             } else { 
-                 // 失敗時: ロールバック
-                 dataStore.masterTasks = dataStore.masterTasks.filter(t => t.taskId !== tempId);
-                 renderTeacherDesignView(document.getElementById('t-area'));
-                 handleError(res); 
-             }
-          })
-          .withFailureHandler(e => {
-              // 失敗時: ロールバック
-              dataStore.masterTasks = dataStore.masterTasks.filter(t => t.taskId !== tempId);
+        const rollbackAdd = (err) => {
+          // 失敗時: ロールバック
+          dataStore.masterTasks = dataStore.masterTasks.filter(t => t.taskId !== tempId);
+          renderTeacherDesignView(document.getElementById('t-area'));
+          handleError(err);
+        };
+        runTeacher('addUnitTask', [appState.unit.id, newData], res => {
+          if (res && res.success) {
+            // 成功時: IDを正式なものに差し替え
+            const realId = res.taskId;
+            const targetIndex = dataStore.masterTasks.findIndex(t => t.taskId === tempId);
+            if (targetIndex > -1) {
+              dataStore.masterTasks[targetIndex].taskId = realId;
+              // IDが変わったので再描画してDOMのdata-idを更新しておく（次回の編集のため）
               renderTeacherDesignView(document.getElementById('t-area'));
-              handleError(e);
-          })
-          .addUnitTask(appState.unit.id, newData);
+            }
+            showToast('success', '保存完了');
+          } else {
+            rollbackAdd(res);
+          }
+        }, rollbackAdd);
       } else {
         const t = dataStore.masterTasks.find(x => x.taskId === taskId);
         t.title = newData.title;
@@ -1009,17 +1030,14 @@ function openTeacherTaskEditModal(taskId) {
         t.print = newData.print;
         
         renderTeacherDesignView(document.getElementById('t-area'));
-        google.script.run
-          .withSuccessHandler(() => showToast('success', '更新しました'))
-          .withFailureHandler(handleError)
-          .updateUnitTask(taskId, newData);
+        runTeacher('updateUnitTask', [taskId, newData], () => showToast('success', '更新しました'), handleError);
       }
     } else if (r.isDenied) {
       Swal.fire({ title: '削除しますか？', text: 'このタスクを削除します。', icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33', confirmButtonText: '削除実行' }).then(delRes => {
         if(delRes.isConfirmed) {
           dataStore.masterTasks = dataStore.masterTasks.filter(t => t.taskId !== taskId);
           renderTeacherDesignView(document.getElementById('t-area'));
-          google.script.run.withSuccessHandler(() => showToast('info', '削除しました')).withFailureHandler(handleError).deleteUnitTask(taskId);
+          runTeacher('deleteUnitTask', [taskId], () => showToast('info', '削除しました'), handleError);
         }
       });
     }
@@ -1034,13 +1052,13 @@ function openUnitInfoEditModal() {
     title: '単元情報の編集',
     html: `
       <div class="text-start">
-        <div class="mb-3"><label class="form-label small fw-bold">単元名 <span class="text-danger">*</span></label><input id="ue-title" class="form-control" value="${unit.title || ''}"></div>
+        <div class="mb-3"><label class="form-label small fw-bold">単元名 <span class="text-danger">*</span></label><input id="ue-title" class="form-control" value="${escapeHtml(unit.title || '')}"></div>
         <div class="row mb-3">
-          <div class="col"><label class="form-label small fw-bold">教科</label><input id="ue-subject" class="form-control" value="${unit.subject || ''}"></div>
-          <div class="col"><label class="form-label small fw-bold">学年</label><input id="ue-grade" class="form-control" value="${unit.grade || ''}"></div>
+          <div class="col"><label class="form-label small fw-bold">教科</label><input id="ue-subject" class="form-control" value="${escapeHtml(unit.subject || '')}"></div>
+          <div class="col"><label class="form-label small fw-bold">学年</label><input id="ue-grade" class="form-control" value="${escapeHtml(unit.grade || '')}"></div>
         </div>
-        <div class="mb-3"><label class="form-label small fw-bold">単元のめあて</label><textarea id="ue-goal" class="form-control" rows="2">${unit.goal || ''}</textarea></div>
-        <div class="mb-3"><label class="form-label small fw-bold">概要</label><textarea id="ue-description" class="form-control" rows="3">${unit.description || ''}</textarea></div>
+        <div class="mb-3"><label class="form-label small fw-bold">単元のめあて</label><textarea id="ue-goal" class="form-control" rows="2">${escapeHtml(unit.goal || '')}</textarea></div>
+        <div class="mb-3"><label class="form-label small fw-bold">概要</label><textarea id="ue-description" class="form-control" rows="3">${escapeHtml(unit.description || '')}</textarea></div>
       </div>`,
     showCancelButton: true,
     confirmButtonText: '更新する',
@@ -1056,7 +1074,7 @@ function openUnitInfoEditModal() {
       appState.unit.title = unit.title;
       renderUnitSelector();
       renderTeacherDesignView(document.getElementById('t-area'));
-      google.script.run.withSuccessHandler(() => showToast('success', '単元情報を更新しました')).withFailureHandler(handleError).updateUnitBasicInfo(unit.id, newData);
+      runTeacher('updateUnitBasicInfo', [unit.id, newData], () => showToast('success', '単元情報を更新しました'), handleError);
     }
   });
 }
@@ -1067,10 +1085,9 @@ function changeUnitTotalHours(delta) {
   if (next < 1) return;
   appState.unit.totalHours = next;
   renderTeacherDesignView(document.getElementById('t-area'));
-  google.script.run
-    .withFailureHandler(e => { appState.unit.totalHours = current; handleError(e); renderTeacherDesignView(document.getElementById('t-area')); })
-    .withSuccessHandler(() => showToast('success', '時数を変更しました'))
-    .updateUnitTotalHours(appState.unit.id, next);
+  runTeacher('updateUnitTotalHours', [appState.unit.id, next],
+    () => showToast('success', '時数を変更しました'),
+    e => { appState.unit.totalHours = current; handleError(e); renderTeacherDesignView(document.getElementById('t-area')); });
 }
 
 // ==========================================
@@ -1140,7 +1157,7 @@ function openUnitManagerModal() {
                       </div>
                     </div>
                     
-                    <textarea id="prompt-area" class="form-control mb-3 border-primary font-monospace" rows="12" style="font-size:0.8rem; white-space: pre-wrap;">${initialPrompt}</textarea>
+                    <textarea id="prompt-area" class="form-control mb-3 border-primary font-monospace" rows="12" style="font-size:0.8rem; white-space: pre-wrap;">${escapeHtml(initialPrompt)}</textarea>
                     
                     <button class="btn btn-primary w-100 mb-3" onclick="copyPrompt()">
                       <i class="bi bi-clipboard me-2"></i>プロンプトをコピー
@@ -1218,8 +1235,8 @@ function submitCreateUnit() {
   const data = { title: title, subject: document.getElementById('cu-subject').value, grade: document.getElementById('cu-grade').value, totalHours: parseInt(document.getElementById('cu-hours').value) || 8 };
   
   showLoading();
-  google.script.run
-    .withSuccessHandler(res => {
+  runTeacher('createNewUnit', [data],
+    res => {
       if (res.success) {
         google.script.run.withSuccessHandler(dataRes => {
           updateDataStore(dataRes.json);
@@ -1230,9 +1247,8 @@ function submitCreateUnit() {
           Swal.fire('作成完了', '新しい単元を作成しました', 'success');
         }).withFailureHandler(handleError).getData();
       } else { handleError({ message: res.error }); }
-    })
-    .withFailureHandler(handleError)
-    .createNewUnit(data);
+    },
+    handleError);
 }
 
 function copyPrompt() {
@@ -1248,7 +1264,7 @@ function copyPrompt() {
 
 function saveCustomPrompt() {
   const text = document.getElementById('prompt-area').value;
-  google.script.run.withSuccessHandler(() => showToast('success', 'プロンプト設定を保存しました')).withFailureHandler(handleError).saveCustomAiPrompt(text);
+  runTeacher('saveCustomAiPrompt', [text], () => showToast('success', 'プロンプト設定を保存しました'), handleError);
 }
 
 function resetCustomPrompt() {
@@ -1264,21 +1280,23 @@ function submitImportJson() {
   try { JSON.parse(jsonStr); } catch(e) { showToast('error', 'JSON形式が正しくありません'); return; }
 
   showLoading();
-  google.script.run.withSuccessHandler(d => {
-    if (d.success) {
-      google.script.run.withSuccessHandler(dataRes => {
-        updateDataStore(dataRes.json);
-        if (appState.unitList.length > 0) {
-           const newUnit = appState.unitList[0];
-           changeUnit(newUnit.id);
-           renderUnitSelector();
-        }
-        hideLoading();
-        Swal.close();
-        Swal.fire('インポート完了', d.count + '件の課題を追加しました', 'success');
-      }).withFailureHandler(handleError).getData();
-    } else { handleError({ message: d.error }); }
-  }).withFailureHandler(handleError).importUnitJson(jsonStr);
+  runTeacher('importUnitJson', [jsonStr],
+    d => {
+      if (d.success) {
+        google.script.run.withSuccessHandler(dataRes => {
+          updateDataStore(dataRes.json);
+          if (appState.unitList.length > 0) {
+             const newUnit = appState.unitList[0];
+             changeUnit(newUnit.id);
+             renderUnitSelector();
+          }
+          hideLoading();
+          Swal.close();
+          Swal.fire('インポート完了', d.count + '件の課題を追加しました', 'success');
+        }).withFailureHandler(handleError).getData();
+      } else { handleError({ message: d.error }); }
+    },
+    handleError);
 }
 
 // [連携] パスポートへ単元計画を送信
@@ -1323,7 +1341,7 @@ function renderControlView(container) {
   // ローカルタイムゾーンで今日の日付を取得（toISOString はUTC基準のため朝9時前は前日になってしまう）
   const now = new Date();
   const todayStr = `${now.getFullYear()}-${('0' + (now.getMonth() + 1)).slice(-2)}-${('0' + now.getDate()).slice(-2)}`;
-  const unitOptions = appState.unitList.map(u => `<option value="${u.id}">${u.title}</option>`).join('');
+  const unitOptions = appState.unitList.map(u => `<option value="${escapeHtml(u.id)}">${escapeHtml(u.title)}</option>`).join('');
   const periodButtons = CONSTANTS.CLASS_PERIODS.map(p => `<button class="btn btn-outline-secondary btn-sm me-1 mb-1" onclick="setScheduleTime('${p.start}', '${p.end}')">${p.label}</button>`).join('');
 
   container.innerHTML = `
@@ -1354,7 +1372,7 @@ function renderControlView(container) {
               <ul class="mb-0 ps-3">
                 ${appState.schedules.map(s => {
                    const u = appState.unitList.find(ul => ul.id === s.unitId);
-                   return `<li>${s.date} ${s.startTime}-${s.endTime}<br><strong>${u ? u.title : '不明'}</strong> 第${s.hour}時<br><span class="text-muted">${s.message || ''}</span></li>`;
+                   return `<li>${escapeHtml(s.date)} ${escapeHtml(s.startTime)}-${escapeHtml(s.endTime)}<br><strong>${u ? escapeHtml(u.title) : '不明'}</strong> 第${escapeHtml(s.hour)}時<br><span class="text-muted">${escapeHtml(s.message || '')}</span></li>`;
                 }).join('') || '予定なし'}
               </ul>
             </div>
@@ -1370,8 +1388,13 @@ function setScheduleTime(start, end) {
 }
 
 function submitSchedule() {
+  // 「全員」タブのままだと配信先クラスが決まらない。既定で 1組 に送ると誤配信になるため、
+  // 先生に必ずクラスを選んでもらう。
+  if (appState.view.teacherClassId === 'All') {
+    return Swal.fire('クラスを選んでください', '配信先クラスが「全員」のままです。上のタブでクラス（例：1組）を選んでから配信してください。', 'warning');
+  }
   const data = {
-    classId: appState.view.teacherClassId === 'All' ? '1組' : appState.view.teacherClassId, 
+    classId: appState.view.teacherClassId,
     date: document.getElementById('sc-date').value,
     startTime: document.getElementById('sc-start').value,
     endTime: document.getElementById('sc-end').value,
@@ -1382,10 +1405,10 @@ function submitSchedule() {
   
   if(!data.date || !data.startTime || !data.endTime) return Swal.fire('エラー', '日時を入力してください', 'error');
   
-  google.script.run.withSuccessHandler(() => {
+  runTeacher('saveClassSchedule', [data], () => {
     showToast('success', 'スケジュールを配信しました');
     loadMainData();
-  }).withFailureHandler(handleError).saveClassSchedule(data);
+  }, handleError);
 }
 
 // ==========================================
@@ -1413,7 +1436,7 @@ function openRosterManagerModal() {
           </div>
           <div class="col-auto">
             <input type="text" id="roster-class" class="form-control form-control-sm text-center fw-bold" 
-                   list="roster-class-list" placeholder="例: 1組" value="${currentClass}" style="width: 100px;">
+                   list="roster-class-list" placeholder="例: 1組" value="${escapeHtml(currentClass)}" style="width: 100px;">
             <datalist id="roster-class-list">
               <option value="1組"><option value="2組"><option value="3組">
             </datalist>
@@ -1492,15 +1515,9 @@ function openRosterManagerModal() {
       // クラス名変更イベント
       document.getElementById('roster-class').addEventListener('change', loadRosterFromDB);
       
-      // 貼り付けイベント
+      // 貼り付けイベントのみを購読する。
+      // （以前は input も購読していたため、1文字入力するたびに1行増える不具合があった）
       document.getElementById('paste-area').addEventListener('paste', handlePaste);
-      document.getElementById('paste-area').addEventListener('input', (e) => {
-         // 入力（貼り付け）されたら解析してクリア
-         if(e.target.value.trim()) {
-           parsePastedText(e.target.value);
-           e.target.value = ''; // クリアしてフィードバック
-         }
-      });
     }
   });
 }
@@ -1529,15 +1546,15 @@ function renderRosterTable() {
   rosterEditData.forEach((student, index) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><input type="number" class="form-control form-control-sm border-0 p-0 text-center" value="${student.number}" onchange="updateRosterData(${index}, 'number', this.value)"></td>
-      <td><input type="text" class="form-control form-control-sm border-0 p-0 px-1" value="${student.name}" onchange="updateRosterData(${index}, 'name', this.value)"></td>
+      <td><input type="number" class="form-control form-control-sm border-0 p-0 text-center" value="${escapeHtml(student.number)}" onchange="updateRosterData(${index}, 'number', this.value)"></td>
+      <td><input type="text" class="form-control form-control-sm border-0 p-0 px-1" value="${escapeHtml(student.name)}" onchange="updateRosterData(${index}, 'name', this.value)"></td>
       <td class="text-center align-middle">
         <div class="form-check form-switch d-flex justify-content-center">
           <input class="form-check-input" type="checkbox" ${student.isActive ? 'checked' : ''} onchange="updateRosterData(${index}, 'isActive', this.checked)" title="${student.isActive?'表示':'非表示(転出)'}">
         </div>
       </td>
       <td class="text-center align-middle">
-        <i class="bi bi-x text-danger cursor-pointer" onclick="removeRosterRow(${index})"></i>
+        <i class="bi bi-x text-danger cursor-pointer" role="button" tabindex="0" aria-label="この行を削除" onclick="removeRosterRow(${index})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); removeRosterRow(${index});}"></i>
       </td>
     `;
     // 非表示(転出)の場合は行をグレーアウト
@@ -1573,11 +1590,21 @@ function removeRosterRow(index) {
 }
 
 function handlePaste(e) {
-  // ペーストイベントでの処理
-  setTimeout(() => {
-    const text = e.target.value;
+  // クリップボードのテキストを直接読み、1回だけ解析する。
+  const cb = e.clipboardData || window.clipboardData;
+  if (cb) {
+    const text = cb.getData('text');
+    e.preventDefault();
     if (text) parsePastedText(text);
-    e.target.value = '';
+    if (e.target) e.target.value = '';
+    return;
+  }
+  // clipboardData が使えない環境向けのフォールバック（貼り付け後の値を1回だけ読む）
+  const el = e.target;
+  setTimeout(() => {
+    const text = el.value;
+    if (text) parsePastedText(text);
+    el.value = '';
   }, 100);
 }
 
@@ -1629,12 +1656,23 @@ function loadRosterFromCSV(input) {
   
   const reader = new FileReader();
   reader.onload = function(e) {
-    const text = e.target.result;
+    const buf = e.target.result;
+    // まず UTF-8 として読む（Googleスプレッドシート等の書き出しはUTF-8）。
+    // 文字化け（U+FFFD 置換文字）が出たら Shift_JIS として読み直す（Excel対策）。
+    let text = '';
+    try {
+      text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+      if (text.indexOf('�') !== -1) {
+        text = new TextDecoder('shift_jis', { fatal: false }).decode(buf);
+      }
+    } catch (err) {
+      // TextDecoder が使えない/未知のエンコーディングのときは UTF-8 の結果をそのまま使う
+      try { text = new TextDecoder().decode(buf); } catch (e2) { text = ''; }
+    }
     parsePastedText(text); // 既存のパース関数を流用
     input.value = ''; // リセット
   };
-  // ExcelのCSVはShift_JISが多いので対応
-  reader.readAsText(file, 'Shift_JIS');
+  reader.readAsArrayBuffer(file);
 }
 
 function cleanRosterData() {
@@ -1665,8 +1703,8 @@ function submitSaveRoster() {
   }
 
   showLoading();
-  google.script.run
-    .withSuccessHandler(res => {
+  runTeacher('saveClassRoster', [classId, rosterEditData], // オブジェクト配列を送信
+    res => {
       if (res.success) {
         google.script.run.withSuccessHandler(d => {
           updateDataStore(d.json);
@@ -1675,9 +1713,8 @@ function submitSaveRoster() {
           showToast('success', `${classId}の名簿を更新しました`);
         }).getData();
       } else { handleError(res); }
-    })
-    .withFailureHandler(handleError)
-    .saveClassRoster(classId, rosterEditData); // オブジェクト配列を送信
+    },
+    handleError);
 }
 
 // ==========================================
@@ -1689,8 +1726,8 @@ function showStudentTaskDetail(name, tid) {
   if (!t) return;
   const p = (dataStore.clsProgress[name] && dataStore.clsProgress[name][tid]) || {};
   Swal.fire({
-    title: `${name} さんの状況`,
-    html: `<div class="text-start"><h6 class="fw-bold text-primary">${escapeHtml(t.title)}</h6><div class="mb-3"><span class="badge bg-secondary me-1">状態: ${p.status||'未'}</span></div><div class="p-3 bg-light rounded mb-3 small">${escapeHtml(p.reflection)||'メモなし'}</div><hr><div class="d-flex justify-content-center gap-2"><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','check')">✅</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','good')">👍</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','great')">💮</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${name}','${tid}','support')">🚩</button></div></div>`,
+    title: `${escapeHtml(name)} さんの状況`,
+    html: `<div class="text-start"><h6 class="fw-bold text-primary">${escapeHtml(t.title)}</h6><div class="mb-3"><span class="badge bg-secondary me-1">状態: ${escapeHtml(p.status||'未')}</span></div><div class="p-3 bg-light rounded mb-3 small">${escapeHtml(p.reflection)||'メモなし'}</div><hr><div class="d-flex justify-content-center gap-2"><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','check')">✅</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','good')">👍</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','great')">💮</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','support')">🚩</button></div></div>`,
     showConfirmButton: false,
     showCloseButton: true
   });
@@ -1701,7 +1738,7 @@ function sendStamp(name, tid, stamp) {
   dataStore.clsFeedback[name][tid] = stamp;
   renderTeacherDashboardContent(); // 更新
   showToast('success', 'スタンプ送信');
-  google.script.run.sendFeedback(name, tid, stamp, appState.view.teacherClassId !== 'All' ? appState.view.teacherClassId : '');
+  runTeacher('sendFeedback', [name, tid, stamp, appState.view.teacherClassId !== 'All' ? appState.view.teacherClassId : '']);
 }
 
 /**
@@ -1722,20 +1759,20 @@ function showTeacherTaskDetailSimple(tid) {
   materials.forEach(m => {
     if (m.data.name) {
       if (m.data.url) {
-        materialHtml += `<a href="${m.data.url}" target="_blank" class="btn btn-outline-primary btn-sm w-100 mb-2 text-start text-truncate"><i class="bi ${m.icon} me-2"></i>${m.data.name}</a>`;
+        materialHtml += `<a href="${escUrl(m.data.url)}" target="_blank" rel="noopener" class="btn btn-outline-primary btn-sm w-100 mb-2 text-start text-truncate"><i class="bi ${m.icon} me-2"></i>${escapeHtml(m.data.name)}</a>`;
       } else {
-        materialHtml += `<div class="mb-2 text-truncate"><span class="badge bg-light text-dark border me-2"><i class="bi ${m.icon}"></i> ${m.label}</span><span class="small">${m.data.name}</span></div>`;
+        materialHtml += `<div class="mb-2 text-truncate"><span class="badge bg-light text-dark border me-2"><i class="bi ${m.icon}"></i> ${m.label}</span><span class="small">${escapeHtml(m.data.name)}</span></div>`;
       }
     }
   });
 
   Swal.fire({
-    title: t.title,
+    title: escapeHtml(t.title),
     html: `
       <div class="text-start">
-        <p class="text-muted border p-3 rounded bg-light mb-3">${t.desc || '説明なし'}</p>
+        <p class="text-muted border p-3 rounded bg-light mb-3">${escapeHtml(t.desc || '説明なし')}</p>
         ${materialHtml ? '<div class="mb-3 border-top pt-2"><div class="small fw-bold text-muted mb-2">学習リソース</div>' + materialHtml + '</div>' : ''}
-        <div class="text-end small text-muted">時間: ${t.time}分</div>
+        <div class="text-end small text-muted">時間: ${escapeHtml(t.time)}分</div>
       </div>`,
     showConfirmButton: false,
     showCloseButton: true

@@ -21,7 +21,7 @@ function renderNameEntry() {
   let classOptions = '';
   // クラスリストがあれば選択肢を作成
   if (dataStore.classList.length > 0) {
-     classOptions = dataStore.classList.map(c => `<option value="${c}">${c}</option>`).join('');
+     classOptions = dataStore.classList.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
   } else {
      classOptions = '<option value="1組">1組</option><option value="2組">2組</option>';
   }
@@ -81,7 +81,7 @@ function updateNameSelect() {
     .sort((a,b) => a.number - b.number);
 
   if (students.length > 0) {
-    const options = students.map(s => `<option value="${s.name}">${s.number}. ${s.name}</option>`).join('');
+    const options = students.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.number)}. ${escapeHtml(s.name)}</option>`).join('');
     container.innerHTML = `
       <select id="input-name" class="form-select form-select-lg text-center rounded-pill border-0 bg-light">
         <option value="" disabled selected>名前をえらんでね</option>
@@ -262,7 +262,7 @@ function renderStudentDaily() {
   const goalHtml = currentUnit.goal 
     ? `<div class="alert alert-success border-0 shadow-sm d-flex align-items-center py-2 px-3 mb-3 small">
          <i class="bi bi-flag-fill text-success me-2 fs-5"></i>
-         <div class="fw-bold flex-grow-1">${currentUnit.goal}</div>
+         <div class="fw-bold flex-grow-1">${escapeHtml(currentUnit.goal)}</div>
        </div>` : '';
 
   // メイン画面のHTML構築
@@ -283,8 +283,8 @@ function renderStudentDaily() {
       <!-- ユーザー情報とツールボタン -->
       <div class="d-flex justify-content-between align-items-center mb-3">
         <div class="fw-bold text-primary me-2 text-truncate" style="max-width:150px;">
-          <i class="bi bi-person-circle me-1"></i>${appState.user.name} 
-          <span class="badge bg-light text-secondary border ms-1">${appState.user.classId}</span>
+          <i class="bi bi-person-circle me-1"></i>${escapeHtml(appState.user.name)}
+          <span class="badge bg-light text-secondary border ms-1">${escapeHtml(appState.user.classId)}</span>
         </div>
         <div class="d-flex gap-2">
           <!-- [追加] ギャラリーウォークボタン -->
@@ -293,7 +293,7 @@ function renderStudentDaily() {
           </button>
           
           <button class="btn btn-outline-primary btn-sm rounded-pill" onclick="setStudentViewMode('planning')"><i class="bi bi-calendar-range"></i> <ruby>計画<rt>けいかく</rt></ruby></button>
-          <button class="btn btn-outline-secondary btn-sm rounded-pill" onclick="renderPortfolioModal('${appState.user.name}')" aria-label="ポートフォリオをひらく"><i class="bi bi-journal-text" aria-hidden="true"></i></button>
+          <button class="btn btn-outline-secondary btn-sm rounded-pill" onclick="renderPortfolioModal('${escJs(appState.user.name)}')" aria-label="ポートフォリオをひらく"><i class="bi bi-journal-text" aria-hidden="true"></i></button>
           <button class="btn btn-outline-success btn-sm rounded-pill" onclick="openDailyReflectionModal()"><i class="bi bi-pencil-square"></i> ふりかえり</button>
         </div>
       </div>
@@ -344,7 +344,7 @@ function createStudentTaskCard(t) {
   // Passportボタン
   let passportBtn = '';
   if (t.format !== 'teacher' && t.category !== 'マイタスク' && appState.passportUrl) {
-    passportBtn = `<button class="btn btn-primary rounded-pill px-3 btn-sm fw-bold me-1 shadow-sm" onclick="event.stopPropagation(); launchPassport('${t.taskId}')" title="みらいパスポートで学習する"><i class="bi bi-rocket-takeoff-fill" aria-hidden="true"></i></button>`;
+    passportBtn = `<button class="btn btn-primary rounded-pill px-3 btn-sm fw-bold me-1 shadow-sm" onclick="event.stopPropagation(); launchPassport('${escJs(t.taskId)}')" title="みらいパスポートで学習する"><i class="bi bi-rocket-takeoff-fill" aria-hidden="true"></i></button>`;
   }
 
   // アクションボタン（完了/途中/Passport）
@@ -353,10 +353,10 @@ function createStudentTaskCard(t) {
     actionBtn = `<button class="btn btn-secondary rounded-pill px-3 btn-sm fw-bold" disabled>完了</button>`; 
   } else {
     const doingBtn = isDoing ? 'btn-warning text-dark' : 'btn-outline-warning text-dark';
-    let buttons = `<button class="btn btn-outline-success rounded-pill px-3 btn-sm fw-bold" onclick="event.stopPropagation(); submitTaskProgress('${t.taskId}','完了',this)">できた</button>`;
-    
+    let buttons = `<button class="btn btn-outline-success rounded-pill px-3 btn-sm fw-bold" onclick="event.stopPropagation(); submitTaskProgress('${escJs(t.taskId)}','完了',this)">できた</button>`;
+
     if (t.format !== 'teacher') {
-       buttons = `<button class="btn ${doingBtn} rounded-pill px-3 btn-sm fw-bold me-1" onclick="event.stopPropagation(); submitTaskProgress('${t.taskId}','途中',this)">途中</button>` + buttons;
+       buttons = `<button class="btn ${doingBtn} rounded-pill px-3 btn-sm fw-bold me-1" onclick="event.stopPropagation(); submitTaskProgress('${escJs(t.taskId)}','途中',this)">途中</button>` + buttons;
        actionBtn = passportBtn + buttons;
     } else {
        actionBtn = buttons;
@@ -365,16 +365,16 @@ function createStudentTaskCard(t) {
   if (t.format === 'teacher') actionBtn = `<span class="badge bg-info text-white me-2">先生</span>` + actionBtn;
 
   return `
-    <div class="card shadow-sm mb-3 card-task ${cardClass} ${borderClass} position-relative" style="cursor:pointer;" onclick="openTaskDetailModal('${t.taskId}')">
+    <div class="card shadow-sm mb-3 card-task ${cardClass} ${borderClass} position-relative" style="cursor:pointer;" onclick="openTaskDetailModal('${escJs(t.taskId)}')">
       ${stampHtml}
       ${isLocked ? `<div class="position-absolute top-50 start-50 translate-middle text-center" style="z-index:2"><i class="bi bi-lock-fill fs-1 text-secondary"></i><br><span class="badge bg-secondary">ロック中</span></div>` : ''}
       <div class="card-body">
         <div class="d-flex justify-content-end align-items-center mb-2">
-           <div class="text-end"><span class="badge bg-light text-secondary border">${t.time}分</span></div>
+           <div class="text-end"><span class="badge bg-light text-secondary border">${escapeHtml(t.time)}分</span></div>
         </div>
-        <h5 class="fw-bold mb-2">${t.title}</h5>
+        <h5 class="fw-bold mb-2">${escapeHtml(t.title)}</h5>
         <div class="d-flex justify-content-between align-items-center mt-1">
-          <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${t.category}</span>
+          <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${escapeHtml(t.category)}</span>
           <div class="text-end">${actionBtn}</div>
         </div>
       </div>
@@ -432,7 +432,7 @@ function renderGalleryWalk() {
             else if (t.category.includes('まとめる')) colorClass = 'bg-matomeru';
             else if (t.category === 'マイタスク') colorClass = 'bg-mytask';
             
-            blocksHtml += `<div class="mini-task-block ${colorClass}" data-title="${t.title}"></div>`;
+            blocksHtml += `<div class="mini-task-block ${colorClass}" data-title="${escapeHtml(t.title)}"></div>`;
           }
         });
         
@@ -454,7 +454,7 @@ function renderGalleryWalk() {
               <div class="rounded-circle bg-light text-secondary d-flex align-items-center justify-content-center me-2 fw-bold small" style="width:32px; height:32px;">
                 ${s.number}
               </div>
-              <div class="fw-bold text-truncate text-secondary small">${displayName}</div>
+              <div class="fw-bold text-truncate text-secondary small">${escapeHtml(displayName)}</div>
             </div>
           </div>
           <div class="card-body px-2 py-2">
@@ -525,13 +525,13 @@ function renderStudentPlanning() {
   allTasks.filter(t => t.format !== 'teacher').forEach(t => { 
     const borderClass = getCategoryColorClass(t.category);
     taskPoolHtml += `
-      <div class="card p-2 mb-2 shadow-sm task-draggable ${borderClass}" style="${t.category==='マイタスク'?'background-color:#fbf5ff;':''}" data-id="${t.taskId}" onclick="openTaskDetailModal('${t.taskId}')">
-        <div class="small fw-bold">${t.title}</div>
+      <div class="card p-2 mb-2 shadow-sm task-draggable ${borderClass}" style="${t.category==='マイタスク'?'background-color:#fbf5ff;':''}" data-id="${escapeHtml(t.taskId)}" onclick="openTaskDetailModal('${escJs(t.taskId)}')">
+        <div class="small fw-bold">${escapeHtml(t.title)}</div>
         <div class="d-flex justify-content-between align-items-center mt-1">
-          <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${t.category}</span>
-          <span class="x-small text-muted">${t.time}分</span>
+          <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${escapeHtml(t.category)}</span>
+          <span class="x-small text-muted">${escapeHtml(t.time)}分</span>
         </div>
-      </div>`; 
+      </div>`;
   });
   
   // 【右側】時数ごとの計画表
@@ -564,18 +564,18 @@ function renderStudentPlanning() {
       const borderClass = getCategoryColorClass(t.category);
       const isTeacher = t.format === 'teacher';
       const badge = isTeacher ? `<span class="badge bg-info text-white me-1" style="font-size:0.6em">固定</span>` : '';
-      const deleteBtn = isTeacher ? '' : `<i class="bi bi-x text-danger" style="cursor:pointer" onclick="event.stopPropagation(); removeFromPlan('${String(i)}', '${t.taskId}')"></i>`;
+      const deleteBtn = isTeacher ? '' : `<i class="bi bi-x text-danger" role="button" tabindex="0" aria-label="計画から外す" style="cursor:pointer" onclick="event.stopPropagation(); removeFromPlan('${escJs(String(i))}', '${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); event.stopPropagation(); removeFromPlan('${escJs(String(i))}', '${escJs(t.taskId)}');}"></i>`;
       const bgStyle = t.category === 'マイタスク' ? 'background-color:#fbf5ff;' : (isTeacher ? 'opacity:0.9;' : '');
       
       plannedTasksHtml += `
-        <div class="card p-2 mb-2 shadow-sm task-draggable ${borderClass}" style="${bgStyle}" data-id="${t.taskId}" onclick="openTaskDetailModal('${t.taskId}')">
+        <div class="card p-2 mb-2 shadow-sm task-draggable ${borderClass}" style="${bgStyle}" data-id="${escapeHtml(t.taskId)}" onclick="openTaskDetailModal('${escJs(t.taskId)}')">
           <div class="d-flex justify-content-between align-items-center">
-            <span class="small fw-bold text-truncate">${badge}${t.title}</span>
+            <span class="small fw-bold text-truncate">${badge}${escapeHtml(t.title)}</span>
             ${deleteBtn}
           </div>
           <div class="d-flex justify-content-between align-items-center mt-1">
-            <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${t.category}</span>
-            <span class="x-small text-muted">${t.time}分</span>
+            <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${escapeHtml(t.category)}</span>
+            <span class="x-small text-muted">${escapeHtml(t.time)}分</span>
           </div>
         </div>`;
     });
@@ -806,9 +806,9 @@ function openTaskDetailModal(taskId) {
   materials.forEach(m => {
     if (m.data && m.data.name) {
       if (m.data.url) {
-        materialHtml += `<a href="${m.data.url}" target="_blank" class="btn btn-outline-primary btn-sm w-100 mb-2 text-start text-truncate fw-bold"><i class="bi ${m.icon} me-2"></i>${m.data.name}</a>`;
+        materialHtml += `<a href="${escUrl(m.data.url)}" target="_blank" rel="noopener" class="btn btn-outline-primary btn-sm w-100 mb-2 text-start text-truncate fw-bold"><i class="bi ${m.icon} me-2"></i>${escapeHtml(m.data.name)}</a>`;
       } else {
-        materialHtml += `<div class="mb-2 text-truncate"><span class="badge bg-light text-dark border me-2"><i class="bi ${m.icon}"></i> ${m.label}</span><span class="small">${m.data.name}</span></div>`;
+        materialHtml += `<div class="mb-2 text-truncate"><span class="badge bg-light text-dark border me-2"><i class="bi ${m.icon}"></i> ${m.label}</span><span class="small">${escapeHtml(m.data.name)}</span></div>`;
       }
     }
   });
@@ -818,7 +818,7 @@ function openTaskDetailModal(taskId) {
   if (t.format !== 'teacher' && t.category !== 'マイタスク' && appState.passportUrl) {
     passportLauncherHtml = `
       <div class="mt-4 pt-3 border-top text-center">
-        <button class="btn btn-outline-primary rounded-pill w-100 fw-bold shadow-sm" onclick="launchPassport('${taskId}')">
+        <button class="btn btn-outline-primary rounded-pill w-100 fw-bold shadow-sm" onclick="launchPassport('${escJs(taskId)}')">
           <i class="bi bi-rocket-takeoff-fill me-2"></i>みらいパスポートで学習する
         </button>
         <div class="x-small text-muted mt-1">※別タブでワークシートが開きます</div>
@@ -826,7 +826,7 @@ function openTaskDetailModal(taskId) {
   }
 
   Swal.fire({
-    title: t.title,
+    title: escapeHtml(t.title),
     html: `
       <div class="text-start">
         <p class="small bg-light p-2 rounded mb-3">${escapeHtml(t.desc)}</p>

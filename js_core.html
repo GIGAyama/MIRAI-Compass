@@ -132,7 +132,8 @@ let appState = {
   unitList: [],       // 全単元のリスト
   schedules: [],      // 配信されたスケジュール通知
   passportUrl: "",    // みらいパスポート（外部連携アプリ）のURL
-  passportDbId: ""    // みらいパスポートの連携用DB ID
+  passportDbId: "",   // みらいパスポートの連携用DB ID
+  teacherToken: ""    // 先生ログイン時に発行される短命トークン（先生専用サーバー関数で使用）
 };
 
 // データベースから取得したデータの格納庫
@@ -291,7 +292,7 @@ function startInitialization() {
       } else handleError({ message: r.error });
     })
     .withFailureHandler(handleError)
-    .initSystem();
+    .initSystem(appState.teacherToken || "");
 }
 
 // ==========================================
@@ -424,7 +425,12 @@ function changeUnit(unitId) {
  */
 function switchMode(newMode) {
   appState.mode = newMode;
-  
+
+  // 生徒モードへ移る（＝先生モードを抜ける）ときは先生トークンを破棄する。
+  if (newMode !== 'teacher') {
+    appState.teacherToken = "";
+  }
+
   // 生徒モードへの切り替え時はデータを再取得して最新状態にする
   if(newMode === 'student') {
     showLoading();
@@ -506,7 +512,7 @@ function renderApp() {
  */
 function renderUnitSelector() {
   const options = appState.unitList.map(u => 
-    `<option value="${u.id}" ${u.id === appState.unit.id ? 'selected' : ''}>${u.subject ? '【'+u.subject+'】' : ''} ${u.title}</option>`
+    `<option value="${escapeHtml(u.id)}" ${u.id === appState.unit.id ? 'selected' : ''}>${u.subject ? '【'+escapeHtml(u.subject)+'】' : ''} ${escapeHtml(u.title)}</option>`
   ).join('');
   
   const html = `
@@ -564,6 +570,7 @@ function checkScheduleAndNotify() {
     const unit = appState.unitList.find(u => u.id === currentSchedule.unitId);
     const unitTitle = unit ? unit.title : "不明な単元";
     const msg = currentSchedule.message || `ただ今の授業：${unitTitle} 第${currentSchedule.hour}時`;
+    const msgHtml = escapeHtml(msg);
     
     // 通知バーを作成・更新
     if (!notifyBar) {
@@ -581,7 +588,7 @@ function checkScheduleAndNotify() {
       };
       document.body.appendChild(notifyBar);
     }
-    notifyBar.innerHTML = `<i class="bi bi-broadcast me-2"></i><span class="fw-bold">${msg}</span> <small class="ms-2 border rounded-pill px-2">移動する</small>`;
+    notifyBar.innerHTML = `<i class="bi bi-broadcast me-2"></i><span class="fw-bold">${msgHtml}</span> <small class="ms-2 border rounded-pill px-2">移動する</small>`;
   } else {
     // 時間外なら通知バーを消す
     if (notifyBar) notifyBar.remove();
@@ -603,14 +610,22 @@ function unlockAudio() {
   } 
 }
 
-function checkSosAndPlaySound() { 
-  const currentSosCount = dataStore.liveStatus.filter(d => d.mode === 'たすけて' || d.mode === 'sos').length; 
+function checkSosAndPlaySound() {
+  const currentSosCount = dataStore.liveStatus.filter(d => d.mode === 'たすけて' || d.mode === 'sos').length;
   // SOSの数が増えた時だけ音を鳴らす
-  if (currentSosCount > appState.sound.prevSosCount) { 
-    const audio = document.getElementById('sos-chime'); 
-    if (audio) audio.play().catch(e => {}); 
-  } 
-  appState.sound.prevSosCount = currentSosCount; 
+  if (currentSosCount > appState.sound.prevSosCount) {
+    const audio = document.getElementById('sos-chime');
+    if (audio) {
+      audio.play().catch(() => {
+        // 音が鳴らせない（自動再生ブロック等）ときは、黙って握りつぶさず一度だけ画面で知らせる。
+        if (!appState.sound.warned) {
+          appState.sound.warned = true;
+          showToast('warning', 'SOSがありました（音は再生できませんでした）');
+        }
+      });
+    }
+  }
+  appState.sound.prevSosCount = currentSosCount;
 }
 
 // カテゴリに応じたCSSクラスを返す
@@ -624,14 +639,69 @@ function getCategoryColorClass(cat) {
 
 // HTMLエスケープ（自由入力テキストを画面に埋め込む際のXSS・表示崩れ対策）
 function escapeHtml(str) {
-  if (str === null || str === undefined) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return MiraiShared.escHtml(str);
 }
+
+// === MIRAI SHARED (両アプリ共通・バイト単位で同一に保つこと) ==========================
+// みらいコンパス / みらいパスポート を単一プロジェクトへ統合するための共通土台。
+// ここに書くものは両リポジトリで完全に同一。片方だけ直さないこと。
+var MiraiShared = (function () {
+  function escHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  // href/src 用。javascript: など実行系スキームを無害化する。data:image/ だけは許可。
+  function escUrl(url) {
+    if (url === null || url === undefined) return '';
+    var raw = String(url);
+    var probe = raw.replace(/[\u0000-\u0020\u007F-\u00A0]/g, '').toLowerCase();
+    if (/^(javascript|vbscript|file|blob):/.test(probe)) return '#';
+    if (/^data:/.test(probe)) return /^data:image\//.test(probe) ? escHtml(raw) : '#';
+    return escHtml(raw);
+  }
+  // JS文字列リテラルへ埋め込む値のエスケープ（onclick="f('...')" 用の移行保険。原則は addEventListener）。
+  function escJs(str) {
+    if (str === null || str === undefined) return '';
+    return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      .replace(/"/g, '\\"').replace(/</g, '\\x3C').replace(/\r?\n/g, '\\n');
+  }
+  // 児童の在席ステータス。正規: 'normal' | 'focus' | 'sos'
+  var PRESENCE = { NORMAL: 'normal', FOCUS: 'focus', SOS: 'sos' };
+  var PRESENCE_LABEL = { normal: '通常', focus: 'しゅうちゅう', sos: 'たすけて' };
+  function normPresence(v) {
+    var s = String(v == null ? '' : v).trim().toLowerCase();
+    if (s === 'sos' || s === 'たすけて' || s === 'help') return 'sos';
+    if (s === 'focus' || s === 'しゅうちゅう' || s === '集中') return 'focus';
+    return 'normal';
+  }
+  // 学習タスクの進捗。正規: 'todo' | 'doing' | 'done'
+  var PROGRESS = { TODO: 'todo', DOING: 'doing', DONE: 'done' };
+  function normProgress(v) {
+    var s = String(v == null ? '' : v).trim().toLowerCase();
+    if (s === 'done' || s === '完了' || s === 'できた') return 'done';
+    if (s === 'doing' || s === 'working' || s === '途中' || s === 'とちゅう') return 'doing';
+    return 'todo';
+  }
+  // 提出物のステータス（パスポート）。正規: 'draft' | 'submitted' | 'graded'
+  var SUBMISSION = { DRAFT: 'draft', SUBMITTED: 'submitted', GRADED: 'graded' };
+  function normSubmission(v) {
+    var s = String(v == null ? '' : v).trim().toLowerCase();
+    if (s === 'graded' || s === '添削済み' || s === '返却') return 'graded';
+    if (s === 'submitted' || s === '提出' || s === 'done') return 'submitted';
+    return 'draft';
+  }
+  return {
+    escHtml: escHtml, escUrl: escUrl, escJs: escJs,
+    PRESENCE: PRESENCE, PRESENCE_LABEL: PRESENCE_LABEL, normPresence: normPresence,
+    PROGRESS: PROGRESS, normProgress: normProgress,
+    SUBMISSION: SUBMISSION, normSubmission: normSubmission
+  };
+})();
+// 既存コードとの互換のため、共通ヘルパーをグローバルへ橋渡しする。
+var escUrl = MiraiShared.escUrl;
+var escJs = MiraiShared.escJs;
 
 // ステップ文字列 ("Step 1") から数値 (1) を取り出す
 function getStepNumber(stepStr) {
@@ -641,14 +711,19 @@ function getStepNumber(stepStr) {
 }
 
 // トースト通知（右上のポップアップ）
-function showToast(icon, title) { 
-  Swal.fire({ toast: true, position: 'top-end', icon: icon, title: title, timer: 2000, showConfirmButton: false }); 
+function showToast(icon, title) {
+  Swal.fire({ toast: true, position: 'top-end', icon: icon, title: title, timer: 2000, showConfirmButton: false });
+  // スクリーンリーダー向けに読み上げる（エラー系アイコンは alert 領域へ）
+  if (typeof announce === 'function') announce(title, icon === 'error' || icon === 'warning');
 }
 
 // エラー表示
-function handleError(err) { 
-  hideLoading(); 
-  Swal.fire({ title: 'システムエラー', text: err.message || err.toString(), icon: 'error' }); 
+function handleError(err) {
+  hideLoading();
+  const msg = (err && (err.message || (err.toString && err.toString()))) || 'エラーが発生しました';
+  Swal.fire({ title: 'システムエラー', text: msg, icon: 'error' });
+  // スクリーンリーダー向けにエラーを読み上げる
+  if (typeof announce === 'function') announce(msg, true);
 }
 
 // ローディング画面の制御
@@ -766,14 +841,15 @@ function toggleSettings() {
     html: `
       <div class="text-start">
         <label class="form-label small fw-bold">みらいパスポート URL</label>
-        <input type="url" id="swal-passport-url" class="form-control mb-3" placeholder="https://script.google.com/..." value="${appState.passportUrl || ''}">
+        <input type="url" id="swal-passport-url" class="form-control mb-3" placeholder="https://script.google.com/..." value="${escapeHtml(appState.passportUrl || '')}">
         
         <label class="form-label small fw-bold">みらいパスポート DB ID</label>
-        <input type="text" id="swal-passport-db-id" class="form-control mb-3" placeholder="スプレッドシートID" value="${appState.passportDbId || ''}">
+        <input type="text" id="swal-passport-db-id" class="form-control mb-3" placeholder="スプレッドシートID" value="${escapeHtml(appState.passportDbId || '')}">
         
         <div class="d-grid gap-2">
           <button class="btn btn-outline-secondary btn-sm" onclick="changePasswordPrompt()">教員パスワード変更</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="openRosterManagerModal()">名簿管理</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="showIntegrationToken()">パスポート連携キーを表示</button>
         </div>
       </div>
     `,
@@ -793,18 +869,40 @@ function toggleSettings() {
         return;
       }
       showLoading();
-      // 【連携】設定をサーバープロパティに保存
-      google.script.run
-        .withSuccessHandler(() => {
+      // 【連携】設定をサーバープロパティに保存（先生専用・トークン付き）
+      runTeacher('savePassportConfig', [data.dbId, data.url],
+        () => {
           appState.passportUrl = data.url;
           appState.passportDbId = data.dbId;
           hideLoading();
           showToast('success', '設定を保存しました');
-        })
-        .withFailureHandler(handleError)
-        .savePassportConfig(data.dbId, data.url);
+        },
+        handleError);
     }
   });
+}
+
+/**
+ * [機能] みらいパスポートへ貼り付ける「連携キー」(INTEGRATION_TOKEN) を表示する。
+ * doPost はこのキーの一致を要求するため、パスポート側の設定に登録すると
+ * SOS・状態通知の受信が有効になる。先生専用（トークン付きで取得）。
+ */
+function showIntegrationToken() {
+  runTeacher('getIntegrationToken', [], (res) => {
+    const tok = (res && res.integrationToken) ? res.integrationToken : '';
+    if (!tok) {
+      Swal.fire('未発行', '連携キーはシステム初期化時に発行されます。先生モードで初期設定を実行してください。', 'info');
+      return;
+    }
+    Swal.fire({
+      title: 'パスポート連携キー',
+      html: `
+        <p class="small text-start">みらいパスポートの先生設定にある「Compass 連携キー」に、下の値を貼り付けてください。</p>
+        <input type="text" class="form-control text-center" readonly value="${escapeHtml(tok)}" onclick="this.select()">
+        <p class="small text-muted text-start mt-2">このキーを知る相手だけが状態通知を送れます。むやみに共有しないでください。</p>`,
+      confirmButtonText: '閉じる'
+    });
+  }, handleError);
 }
 
 /**
@@ -816,7 +914,7 @@ function showUnitInfoModal() {
   if (!unit) return;
 
   Swal.fire({
-    title: `<div class="fs-5 fw-bold text-primary">${unit.subject || ''} ${unit.grade ? '('+unit.grade+')' : ''}</div><div class="fs-4">${unit.title}</div>`,
+    title: `<div class="fs-5 fw-bold text-primary">${escapeHtml(unit.subject || '')} ${unit.grade ? '('+escapeHtml(unit.grade)+')' : ''}</div><div class="fs-4">${escapeHtml(unit.title)}</div>`,
     html: `
       <div class="text-start p-2">
         <div class="mb-3">
