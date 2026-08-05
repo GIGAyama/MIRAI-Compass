@@ -5,24 +5,82 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="description" content="自由進度学習支援アプリケーション「みらいコンパス」">
   <meta name="theme-color" content="#1a73e8">
+  <meta name="color-scheme" content="light">
   <title>みらいコンパス</title>
+
+  <!--
+    === Content Security Policy ===
+    このページのスクリプトは app.js / install-hook.js の2本だけで、
+    インラインの <script> も onclick= も使っていません。
+    そのため 'unsafe-inline' を足さずに script-src 'self' で締められます。
+
+    frame-src に script.google.com / googleusercontent.com が要るのは、
+    アプリ本体（GAS）を iframe で表示するためです。
+
+    ⚠️ frame-ancestors はここには書きません。<meta> で配ると無視され、
+       読み込みのたびにコンソールへ警告が出るだけになります。
+       他サイトへの埋め込みを止めるには HTTP ヘッダーが必要ですが、
+       GitHub Pages では足せません。独自ドメインや CDN を挟むときに
+       サーバー側で frame-ancestors 'self' を設定してください。
+  -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    script-src 'self';
+    style-src 'self' 'unsafe-inline';
+    img-src 'self' data:;
+    font-src 'self';
+    connect-src 'self';
+    frame-src https://script.google.com https://*.googleusercontent.com;
+    worker-src 'self';
+    manifest-src 'self';
+    object-src 'none';
+    base-uri 'self';
+    form-action 'self';
+  ">
+
+  <!--
+    ① インストールの合図を「いちばん先に」受け取る。
+       Chrome は条件が揃うと即座に beforeinstallprompt を出すため、
+       ほかの読み込みより後だと合図を取りこぼし、通信が遅い端末で
+       「インストール」ボタンが出なくなる。
+  -->
+  <script src="install-hook.js"></script>
 
   <!-- PWA設定 -->
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <!-- ⚠️ apple-touch-icon には透明を含む画像を指さない。
+       iOS は透明部分を黒で埋めるため、ホーム画面でアイコンの四隅だけが黒く出る。
+       この画像は tools/build-icons.mjs が透明 0 画素で作り直したもの。 -->
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="みらいコンパス">
 
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { height: 100%; overflow: hidden; }
+    :root {
+      --primary: #0a58ca;   /* 文字用。#1a73e8 は白地で 4.27 しかなく基準に届かない */
+      --primary-bg: #1a73e8;/* 面用 */
+      --muted: #5c636a;     /* 白地で 5.99。以前の #6c757d は 4.68、#adb5bd は 2.03 だった */
+      --text: #3c4043;
+      --safe-t: env(safe-area-inset-top, 0px);
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-l: env(safe-area-inset-left, 0px);
+      --safe-r: env(safe-area-inset-right, 0px);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+    /* 100vh はモバイルのアドレスバー分だけはみ出すので dvh を使う */
+    html, body { height: 100dvh; overflow: hidden; }
+    @supports not (height: 100dvh) { html, body { height: 100vh; } }
     body {
-      font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
+      font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
       background: #f0f2f5;
-      color: #3c4043;
+      color: var(--text);
+      line-height: 1.8;
+      font-size: clamp(15px, 1.6vw + 10px, 18px);
+      touch-action: manipulation;
     }
 
     /* ===== アプリ表示（全画面iframe） ===== */
@@ -39,7 +97,7 @@
     /* 設定を開くための隠しホットスポット（左上すみを5回タップ） */
     #settings-hotspot {
       position: fixed;
-      top: 0; left: 0;
+      top: var(--safe-t); left: var(--safe-l);
       width: 48px; height: 48px;
       z-index: 50;
       background: transparent;
@@ -53,10 +111,12 @@
       flex-direction: column;
       justify-content: center;
       align-items: center;
-      padding: 24px;
+      padding: calc(24px + var(--safe-t)) calc(24px + var(--safe-r))
+               calc(24px + var(--safe-b)) calc(24px + var(--safe-l));
       background: #f0f2f5;
       z-index: 100;
       overflow-y: auto;
+      overscroll-behavior: contain;
     }
     .setup-card {
       background: #fff;
@@ -68,77 +128,140 @@
       text-align: center;
     }
     .setup-card img { width: 84px; height: 84px; margin-bottom: 12px; }
-    .setup-card h1 { font-size: 1.4rem; color: #1a73e8; margin-bottom: 8px; }
-    .setup-card p.lead { font-size: 0.9rem; color: #6c757d; margin-bottom: 20px; line-height: 1.7; }
+    .setup-card h1 { font-size: clamp(20px, 2.6vw + 12px, 26px); color: var(--primary); margin-bottom: 8px; }
+    .setup-card p.lead { font-size: .9em; color: var(--muted); margin-bottom: 20px; }
     .setup-card label {
       display: block;
       text-align: left;
-      font-size: 0.8rem;
+      font-size: .8em;
       font-weight: bold;
-      color: #6c757d;
+      color: var(--muted);
       margin-bottom: 6px;
     }
     .setup-card input[type="url"] {
       width: 100%;
+      min-height: 44px;          /* 指で押せる高さ */
       padding: 12px 14px;
-      font-size: 0.9rem;
+      font-size: .9em;
       border: 2px solid #dee2e6;
       border-radius: 12px;
       outline: none;
       margin-bottom: 6px;
     }
-    .setup-card input[type="url"]:focus { border-color: #1a73e8; }
-    .setup-hint { font-size: 0.75rem; color: #adb5bd; text-align: left; margin-bottom: 18px; }
+    .setup-card input[type="url"]:focus { border-color: var(--primary); }
+    .setup-hint { font-size: .78em; color: var(--muted); text-align: left; margin-bottom: 18px; }
     .setup-error {
       display: none;
-      font-size: 0.8rem;
-      color: #ea4335;
-      background: rgba(234, 67, 53, 0.08);
+      font-size: .85em;
+      color: #b02a37;            /* 白地で 5.09。以前の #ea4335 は 3.68 で基準未満だった */
+      background: rgba(176, 42, 55, 0.08);
       border-radius: 8px;
       padding: 8px 12px;
       margin-bottom: 14px;
       text-align: left;
     }
     .btn {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       border: none;
       border-radius: 999px;
+      min-height: 44px;          /* タップ領域 */
       padding: 12px 32px;
-      font-size: 1rem;
+      font-size: 1em;
       font-weight: bold;
+      font-family: inherit;
       cursor: pointer;
-      transition: opacity 0.15s;
-    }
-    .btn:hover { opacity: 0.85; }
-    .btn-primary { background: #1a73e8; color: #fff; width: 100%; }
-    .btn-secondary {
-      background: transparent;
-      color: #6c757d;
-      font-size: 0.85rem;
-      padding: 10px 20px;
+      transition: opacity .15s;
       text-decoration: none;
     }
-    .setup-footer { margin-top: 16px; font-size: 0.75rem; color: #adb5bd; }
+    .btn:hover { opacity: .85; }
+    .btn:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
+    .btn-primary { background: var(--primary); color: #fff; width: 100%; }
+    .btn-secondary {
+      background: transparent;
+      color: var(--muted);
+      font-size: .9em;
+      padding: 10px 20px;
+    }
+    .btn-install {
+      background: #fff;
+      color: var(--primary);
+      border: 2px solid var(--primary);
+      width: 100%;
+      margin-top: 12px;
+      display: none;             /* 案内できるときだけ出す */
+    }
+    .setup-footer { margin-top: 16px; font-size: .78em; color: var(--muted); }
+
+    .ios-hint {
+      display: none;
+      margin-top: 14px;
+      font-size: .82em;
+      color: var(--muted);
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 12px 14px;
+      text-align: left;
+    }
 
     /* オフライン通知バー */
     #offline-bar {
       display: none;
       position: fixed;
       top: 0; left: 0; right: 0;
+      padding-top: calc(8px + var(--safe-t));
       background: #fbbc04;
-      color: #3c4043;
-      font-size: 0.85rem;
+      color: #3c4043;            /* #fbbc04 の上で 9.6:1 */
+      font-size: .9em;
       font-weight: bold;
       text-align: center;
-      padding: 8px;
+      padding-bottom: 8px;
       z-index: 200;
+    }
+
+    /* 更新の帯。押されるまで切り替えない。
+       既定は非表示で、app.js が hidden 属性を外したときだけ出す。 */
+    #update-bar {
+      position: fixed;
+      left: 0; right: 0;
+      bottom: 0;
+      padding: 12px calc(16px + var(--safe-r)) calc(12px + var(--safe-b)) calc(16px + var(--safe-l));
+      background: #0a58ca;
+      color: #fff;
+      z-index: 300;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: .95em;
+    }
+    #update-bar[hidden] { display: none; }
+    #btn-update {
+      background: #fff;
+      color: #0a58ca;
+      padding: 8px 20px;
+      min-height: 44px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+    @media (forced-colors: active) {
+      .btn, .setup-card, input[type="url"] { border: 2px solid ButtonText; }
     }
   </style>
 </head>
 <body>
 
   <!-- オフライン通知 -->
-  <div id="offline-bar">オフラインです。インターネットに接続すると利用できます。</div>
+  <div id="offline-bar" role="status" aria-live="polite">オフラインです。インターネットに接続すると利用できます。</div>
 
   <!-- アプリ本体（GAS）を表示する全画面フレーム -->
   <iframe id="app-frame" title="みらいコンパス"
@@ -150,7 +273,7 @@
   <!-- 初期設定 / 設定画面 -->
   <div id="setup-screen">
     <div class="setup-card">
-      <img src="icons/icon-192.png" alt="みらいコンパス">
+      <img src="icons/icon-192.png" width="84" height="84" alt="">
       <h1>&#129517; みらいコンパス</h1>
       <p class="lead">
         はじめに、先生から伝えられた<br>
@@ -162,139 +285,37 @@
       <input type="url" id="gas-url" placeholder="https://script.google.com/macros/s/........./exec"
              autocomplete="off" spellcheck="false">
       <div class="setup-hint">「デプロイ」で発行された <code>/exec</code> で終わるURLです。</div>
-      <div class="setup-error" id="setup-error"></div>
+      <div class="setup-error" id="setup-error" role="alert"></div>
 
-      <button class="btn btn-primary" id="btn-save" onclick="saveUrl()">アプリをはじめる</button>
+      <button class="btn btn-primary" id="btn-save" type="button">アプリをはじめる</button>
+
+      <!-- インストールボタン。案内できるときだけ出る（app.js で制御）。 -->
+      <button class="btn btn-install" id="btn-install" type="button">
+        この端末にアプリとして入れる
+      </button>
+
+      <!-- iPhone / iPad には beforeinstallprompt が無いので手順を案内する -->
+      <div class="ios-hint" id="ios-hint">
+        <strong>iPhone・iPad の場合</strong><br>
+        画面下の「共有」ボタン（□に↑）を押し、
+        「ホーム画面に追加」を選ぶとアプリとして使えます。
+      </div>
 
       <div id="extra-actions" style="display:none; margin-top: 14px;">
         <a class="btn btn-secondary" href="#" id="link-open-tab" target="_blank" rel="noopener">新しいタブで開く</a>
-        <button class="btn btn-secondary" onclick="clearUrl()">設定をリセット</button>
+        <button class="btn btn-secondary" id="btn-clear" type="button">設定をリセット</button>
       </div>
 
       <div class="setup-footer">&copy; 2026 みらいコンパス Project</div>
     </div>
   </div>
 
-  <script>
-    'use strict';
+  <!-- 更新の案内。押されるまで新しい版に切り替えない。 -->
+  <div id="update-bar" role="status" aria-live="polite" hidden>
+    <span>あたらしい ばんが あります</span>
+    <button class="btn" id="btn-update" type="button">さいしんに する</button>
+  </div>
 
-    var LS_KEY = 'mirai_compass_gas_url';
-
-    // --- URLの取得・保存 ---
-
-    function getStoredUrl() {
-      try { return localStorage.getItem(LS_KEY) || ''; } catch (e) { return ''; }
-    }
-
-    function isValidGasUrl(url) {
-      // GASウェブアプリの正規URLのみ許可（他サイトの埋め込みを防止）
-      return /^https:\/\/script\.google\.com\/(a\/)?macros\/[^\s]+\/exec(\?.*)?$/.test(url);
-    }
-
-    function saveUrl() {
-      var input = document.getElementById('gas-url');
-      var errEl = document.getElementById('setup-error');
-      var url = input.value.trim();
-
-      if (!isValidGasUrl(url)) {
-        errEl.textContent = 'URLの形式が正しくありません。https://script.google.com/macros/.../exec の形のURLを入力してください。';
-        errEl.style.display = 'block';
-        return;
-      }
-      errEl.style.display = 'none';
-      try { localStorage.setItem(LS_KEY, url); } catch (e) {}
-      showApp(url);
-    }
-
-    function clearUrl() {
-      if (!confirm('保存されているURL設定を削除しますか？')) return;
-      try { localStorage.removeItem(LS_KEY); } catch (e) {}
-      location.href = location.pathname; // クエリを消してリロード
-    }
-
-    // --- 画面切り替え ---
-
-    function showApp(url) {
-      var frame = document.getElementById('app-frame');
-      frame.src = url;
-      frame.style.display = 'block';
-      document.getElementById('setup-screen').style.display = 'none';
-    }
-
-    function showSetup(prefillUrl) {
-      var stored = prefillUrl || getStoredUrl();
-      if (stored) {
-        document.getElementById('gas-url').value = stored;
-        var extra = document.getElementById('extra-actions');
-        extra.style.display = 'block';
-        document.getElementById('link-open-tab').href = stored;
-      }
-      document.getElementById('setup-screen').style.display = 'flex';
-      document.getElementById('app-frame').style.display = 'none';
-    }
-
-    // --- 隠し設定ホットスポット（左上すみを2.5秒以内に5回タップ） ---
-
-    (function () {
-      var taps = [];
-      document.getElementById('settings-hotspot').addEventListener('click', function () {
-        var now = Date.now();
-        taps = taps.filter(function (t) { return now - t < 2500; });
-        taps.push(now);
-        if (taps.length >= 5) {
-          taps = [];
-          showSetup();
-        }
-      });
-    })();
-
-    // --- オフライン表示 ---
-
-    function updateOnlineStatus() {
-      document.getElementById('offline-bar').style.display = navigator.onLine ? 'none' : 'block';
-    }
-    window.addEventListener('online', updateOnlineStatus);
-    window.addEventListener('offline', updateOnlineStatus);
-
-    // --- 起動処理 ---
-
-    (function init() {
-      updateOnlineStatus();
-
-      var params = new URLSearchParams(location.search);
-
-      // ?app=<GASのURL> でURLを配布・事前設定できる（例: 先生がQRコードで配る）
-      var presetUrl = params.get('app');
-      if (presetUrl && isValidGasUrl(presetUrl)) {
-        try { localStorage.setItem(LS_KEY, presetUrl); } catch (e) {}
-        // クエリを消してリロード（インストール後のstart_urlと一致させる）
-        location.replace(location.pathname);
-        return;
-      }
-
-      // ?settings=1 で設定画面を強制表示
-      if (params.get('settings') === '1') {
-        showSetup();
-        return;
-      }
-
-      var stored = getStoredUrl();
-      if (stored && isValidGasUrl(stored)) {
-        showApp(stored);
-      } else {
-        showSetup();
-      }
-    })();
-
-    // --- Service Worker 登録（PWAインストールの必須条件） ---
-
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', function () {
-        navigator.serviceWorker.register('sw.js').catch(function (e) {
-          console.warn('Service Worker registration failed:', e);
-        });
-      });
-    }
-  </script>
+  <script src="app.js"></script>
 </body>
 </html>

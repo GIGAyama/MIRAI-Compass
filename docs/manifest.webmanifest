@@ -1,15 +1,21 @@
 {
   "name": "みらいコンパス",
   "short_name": "みらいコンパス",
-  "description": "自由進度学習支援アプリケーション「みらいコンパス」",
-  "id": "./",
-  "start_url": "./",
-  "scope": "./",
+  "description": "自由進度学習支援アプリケーション「みらいコンパス」。学習の計画づくり、今日の学習、ふりかえり、ポートフォリオを1つにまとめます。",
+  "lang": "ja",
+  "dir": "ltr",
+
+  "id": "/MIRAI-Compass/",
+  "start_url": "/MIRAI-Compass/",
+  "scope": "/MIRAI-Compass/",
+
   "display": "standalone",
+  "display_override": ["standalone", "fullscreen", "minimal-ui"],
+  "launch_handler": { "client_mode": ["navigate-existing", "auto"] },
   "orientation": "any",
   "background_color": "#f0f2f5",
   "theme_color": "#1a73e8",
-  "lang": "ja",
+  "categories": ["education", "kids"],
   "icons": [
     {
       "src": "icons/icon-192.png",
