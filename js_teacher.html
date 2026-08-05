@@ -696,6 +696,7 @@ function renderSummaryListView(container) {
     const summary = pf.summary || "";
     const feedback = pf.feedback || "";
     const stamp = pf.stamp || "";
+    const pfStudentId = pf.studentId || ""; // 本人メール（あれば本人の行にフィードバックを着地させる）
 
     // スキル集計
     const skillCounts = {};
@@ -747,7 +748,7 @@ function renderSummaryListView(container) {
           </div>
           <div class="input-group input-group-sm">
             <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${escapeHtml(feedback)}">
-            <button id="btn-save-${uniqueId}" class="btn btn-primary" onclick="saveListFeedback('${escJs(s.name)}', '${uniqueId}')">保存</button>
+            <button id="btn-save-${uniqueId}" class="btn btn-primary" onclick="saveListFeedback('${escJs(s.name)}', '${uniqueId}', '${escJs(pfStudentId)}')">保存</button>
           </div>
         </td>
       </tr>`;
@@ -779,18 +780,18 @@ function renderSummaryListView(container) {
     </div>`;
 }
 
-function saveListFeedback(studentName, uniqueId) {
+function saveListFeedback(studentName, uniqueId, studentId) {
   const comment = document.getElementById(`fb-text-${uniqueId}`).value;
   const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
   const stamp = stampEl ? stampEl.value : "";
-  
+
   const btn = document.getElementById(`btn-save-${uniqueId}`);
   const originalText = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '...';
-  
-  // サーバーへ保存
-  runTeacher('savePortfolioFeedback', [studentName, appState.unit.id, comment, stamp],
+
+  // サーバーへ保存（studentId があれば本人の行に着地。無ければサーバー側で studentName にフォールバック）
+  runTeacher('savePortfolioFeedback', [studentName, appState.unit.id, comment, stamp, studentId || ''],
     () => {
       showToast('success', '保存しました');
       btn.disabled = false;
@@ -819,8 +820,14 @@ function saveAllListFeedbacks() {
     const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
     
     if (commentInput) {
+      // 本人メール（あれば）を添えて、先生フィードバックを本人の行へ確実に着地させる。
+      let sid = "";
+      if (dataStore.clsPortfolios && dataStore.clsPortfolios[s.name] && dataStore.clsPortfolios[s.name][appState.unit.id]) {
+        sid = dataStore.clsPortfolios[s.name][appState.unit.id].studentId || "";
+      }
       feedbackList.push({
         studentName: s.name,
+        studentId: sid,
         unitId: appState.unit.id,
         feedback: commentInput.value,
         stamp: stampEl ? stampEl.value : ""

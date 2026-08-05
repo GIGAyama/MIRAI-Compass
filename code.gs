@@ -31,23 +31,24 @@ const DB_SCHEMA = {
   },
   Feedback: {
     name: 'Feedback',
-    headers: ['feedbackId', 'studentName', 'taskId', 'stamp', 'timestamp', 'classId']
+    // studentId（末尾）: 本人＝Googleメール（サーバー由来）。studentName は表示・先生の名前グループ化用に残す。
+    headers: ['feedbackId', 'studentName', 'taskId', 'stamp', 'timestamp', 'classId', 'studentId']
   },
   MyTasks: {
     name: 'MyTasks',
-    headers: ['taskId', 'studentName', 'title', 'description', 'estTime', 'created_at', 'unitId', 'classId']
+    headers: ['taskId', 'studentName', 'title', 'description', 'estTime', 'created_at', 'unitId', 'classId', 'studentId']
   },
   StudentPlans: {
     name: 'StudentPlans',
-    headers: ['studentName', 'unitId', 'planData', 'lastUpdate', 'classId']
+    headers: ['studentName', 'unitId', 'planData', 'lastUpdate', 'classId', 'studentId']
   },
   DailyReflections: {
     name: 'DailyReflections',
-    headers: ['studentName', 'unitId', 'hour', 'achievement', 'comment', 'teacherCheck', 'timestamp', 'classId', 'skills']
+    headers: ['studentName', 'unitId', 'hour', 'achievement', 'comment', 'teacherCheck', 'timestamp', 'classId', 'skills', 'studentId']
   },
   Portfolios: {
     name: 'Portfolios',
-    headers: ['studentName', 'unitId', 'summary', 'lastUpdate', 'classId', 'feedback', 'stamp']
+    headers: ['studentName', 'unitId', 'summary', 'lastUpdate', 'classId', 'feedback', 'stamp', 'studentId']
   },
   ClassSchedule: {
     name: 'ClassSchedule',
@@ -364,7 +365,8 @@ function getData() {
       const name = String(r[0]); const uid = String(r[1]);
       if (!clsPortfolios[name]) clsPortfolios[name] = {};
       clsPortfolios[name][uid] = {
-        summary: String(r[2]), feedback: String(r[5] || ""), stamp: String(r[6] || "")
+        summary: String(r[2]), feedback: String(r[5] || ""), stamp: String(r[6] || ""),
+        studentId: String(r[7] || "") // 先生フィードバックを本人の行に確実に着地させるための本人メール
       };
     });
 
@@ -379,11 +381,22 @@ function getData() {
       }))
       .filter(s => s.date >= todayStr);
 
+    // getData は先生用の一括リーダーだが、児童モードの初期ロード（loadMainData）からも同じ関数が呼ばれる。
+    // 児童が受け取る生JSONに他児童の「機微データ」を載せない（＝クライアント側の出し分けに頼らない IDOR 対策）。
+    // 児童ビューが実際に使う他者データは「ギャラリーウォーク／ひろば」向けの plans・myTasks（匿名切替あり）と
+    // 教室の live 状況・roster のみ。progress / feedback / dailyReflections / portfolios は児童ビューでは
+    // 自分の分を getStudentProgress から取得しており、他者分は一切参照しないため、非教員には空で返す。
+    // 先生（requireTeacher 相当）には従来どおり全データを返す（集計・座席・ヒートマップ・まとめ表示は不変）。
+    const isTeacherCaller = MiraiAuth.isTeacher();
     return createSuccessResponse({
       json: JSON.stringify({
-        unit: unitData, live: liveData, roster: rosterData, progress: clsProgress, feedback: clsFeedback,
-        myTasks: allMyTasks, plans: clsPlans, dailyReflections: clsReflections,
-        portfolios: clsPortfolios, schedules: schedules
+        unit: unitData, live: liveData, roster: rosterData,
+        progress: isTeacherCaller ? clsProgress : {},
+        feedback: isTeacherCaller ? clsFeedback : {},
+        myTasks: allMyTasks, plans: clsPlans,
+        dailyReflections: isTeacherCaller ? clsReflections : {},
+        portfolios: isTeacherCaller ? clsPortfolios : {},
+        schedules: schedules
       })
     });
   } catch (e) { return createErrorResponse(e); }
@@ -417,19 +430,22 @@ function getLiveStatusSnapshot() {
  */
 function getStudentProgress(studentName, classId, currentUnitId) {
   try {
+    // 本人＝Googleメール（サーバー由来）。これ自身の読み取りなので、身元は必ずサーバーで確定する。
+    // クライアント申告の studentName は表示名としてのみ使い、アクセス範囲の判定には使わない。
+    const sid = MiraiAuth.requireUser();
     const ssId = PROPERTIES.getProperty('SS_ID');
     if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
     const ss = SpreadsheetApp.openById(ssId);
 
-    // ログイン時に現在の単元・クラス情報をLiveStatusに書き込む
+    // ログイン時に現在の単元・クラス情報をLiveStatusに書き込む（本人行を studentId で特定）
     if (classId || currentUnitId) {
-      updateLiveStatusMeta(ss, studentName, classId, currentUnitId);
+      updateLiveStatusMeta(ss, sid, studentName, classId, currentUnitId);
     }
 
-    // 必要なデータのみ抽出して返す
-    const map = {}; 
+    // 必要なデータのみ抽出して返す（すべて本人 studentId で自己スコープ）
+    const map = {};
     fetchSheetData(ss, DB_SCHEMA.LearningLogs.name).forEach(r => {
-      if (r[2] === studentName) {
+      if (r[1] === sid) { // col1 = studentId
         const tid = String(r[3]);
         if (!map[tid]) map[tid] = { status: '', reflection: '' };
         if (r[4] && r[4] !== 'メモ') map[tid].status = r[4];
@@ -437,14 +453,16 @@ function getStudentProgress(studentName, classId, currentUnitId) {
       }
     });
 
-    const fbMap = {}; 
+    // Feedback は先生が名前指定で書き込む（studentId 列は空）。stamp 用に名前で照合する。
+    // ※先生発行スタンプのみ・機微度は低いが、名前ベースのため残留リスクとして報告済み。
+    const fbMap = {};
     fetchSheetData(ss, DB_SCHEMA.Feedback.name).forEach(r => {
       if (r[1] === studentName) fbMap[String(r[2])] = String(r[3]);
     });
 
-    const myTasks = []; 
+    const myTasks = [];
     fetchSheetData(ss, DB_SCHEMA.MyTasks.name).forEach(r => {
-      if (r[1] === studentName) {
+      if (r[8] === sid) { // col8 = studentId
         myTasks.push({
           taskId: String(r[0]), title: String(r[2]), desc: String(r[3]), time: Number(r[4]),
           category: 'マイタスク', type: 'challenge', format: 'student', unitId: String(r[6] || '')
@@ -452,14 +470,14 @@ function getStudentProgress(studentName, classId, currentUnitId) {
       }
     });
 
-    const plans = {}; 
+    const plans = {};
     fetchSheetData(ss, DB_SCHEMA.StudentPlans.name).forEach(r => {
-      if (r[0] === studentName) plans[r[1]] = safeJsonParse(r[2]);
+      if (r[5] === sid) plans[r[1]] = safeJsonParse(r[2]); // col5 = studentId
     });
 
-    const reflections = {}; 
+    const reflections = {};
     fetchSheetData(ss, DB_SCHEMA.DailyReflections.name).forEach(r => {
-      if (r[0] === studentName) {
+      if (r[9] === sid) { // col9 = studentId
         const uid = String(r[1]);
         const hour = String(r[2]);
         if (!reflections[uid]) reflections[uid] = {};
@@ -474,7 +492,7 @@ function getStudentProgress(studentName, classId, currentUnitId) {
     if(pSheet) {
       const pData = pSheet.getDataRange().getValues();
       for(let i=1; i<pData.length; i++) {
-        if(pData[i][0] === studentName && String(pData[i][1]) === String(currentUnitId)) {
+        if(pData[i][7] === sid && String(pData[i][1]) === String(currentUnitId)) { // col7 = studentId
           portfolioData = {
             summary: pData[i][2],
             feedback: pData[i][5] || "",
@@ -497,16 +515,17 @@ function getStudentProgress(studentName, classId, currentUnitId) {
 /**
  * 内部関数: 児童のLiveStatus（クラス、単元）を更新
  */
-function updateLiveStatusMeta(ss, name, classId, unitId) {
+function updateLiveStatusMeta(ss, sid, name, classId, unitId) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) { // 5秒待機
     try {
       const sheet = ss.getSheetByName(DB_SCHEMA.LiveStatus.name);
       const data = sheet.getDataRange().getValues();
       for (let i = 1; i < data.length; i++) {
-        if (data[i][1] === name) {
+        if (data[i][0] === sid) { // col0 = studentId（本人）
           if (unitId) sheet.getRange(i + 1, 6).setValue(unitId);
           if (classId) sheet.getRange(i + 1, 8).setValue(classId);
+          if (name) sheet.getRange(i + 1, 2).setValue(name); // 表示名を最新に
           return;
         }
       }
@@ -531,33 +550,36 @@ function updateStatus(studentName, taskId, taskTitle, status, mode, reflection, 
   }
 
   try {
+    // 本人＝Googleメール（サーバー由来）を身元/UPSERTキーにする。studentName は表示・先生の名前グループ化用。
+    const sid = MiraiAuth.requireUser();
     const ss = getSpreadsheet();
     const now = new Date();
-    
-    // ログ履歴に追加
+
+    // ログ履歴に追加（studentId 列＝本人メール、studentName 列＝表示名）
     ss.getSheetByName(DB_SCHEMA.LearningLogs.name).appendRow([
-      Utilities.getUuid(), studentName, studentName, taskId, status, reflection || "", now, classId || ""
+      Utilities.getUuid(), sid, studentName, taskId, status, reflection || "", now, classId || ""
     ]);
 
-    // LiveStatus（現在の状態）を更新
+    // LiveStatus（現在の状態）を更新。行の一致は studentId（本人）で行い、同名衝突を避ける。
     if (status !== 'メモ') {
       const liveSheet = ss.getSheetByName(DB_SCHEMA.LiveStatus.name);
       const data = liveSheet.getDataRange().getValues();
       let rIdx = -1;
       for (let i = 1; i < data.length; i++) {
-        if (data[i][1] === studentName) { rIdx = i + 1; break; }
+        if (data[i][0] === sid) { rIdx = i + 1; break; }
       }
       const displayTitle = taskTitle || taskId;
-      
+
       if (rIdx > 0) {
-        // 既存行を更新
+        // 既存行を更新（表示名も最新の申告値に合わせる）
+        liveSheet.getRange(rIdx, 2).setValue(studentName);
         liveSheet.getRange(rIdx, 3, 1, 2).setValues([[displayTitle, mode]]);
         liveSheet.getRange(rIdx, 5).setValue(now);
         if (classId) liveSheet.getRange(rIdx, 8).setValue(classId);
         if (currentUnitId) liveSheet.getRange(rIdx, 6).setValue(currentUnitId);
       } else {
-        // 新規追加
-        liveSheet.appendRow([studentName, studentName, displayTitle, mode, now, currentUnitId || "", 1, classId || "", 0, 0]);
+        // 新規追加（studentId 列＝本人メール、studentName 列＝表示名）
+        liveSheet.appendRow([sid, studentName, displayTitle, mode, now, currentUnitId || "", 1, classId || "", 0, 0]);
       }
     }
     return createSuccessResponse();
@@ -889,9 +911,11 @@ function addMyTask(studentName, title, desc, time, unitId, classId) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
+      const sid = MiraiAuth.requireUser();
       const ss = getSpreadsheet();
       const taskId = "MT" + Utilities.getUuid().substring(0, 8);
-      ss.getSheetByName(DB_SCHEMA.MyTasks.name).appendRow([taskId, studentName, title, desc, time, new Date(), unitId || "", classId || ""]);
+      // studentId 列（末尾）＝本人メール、studentName 列＝表示名。
+      ss.getSheetByName(DB_SCHEMA.MyTasks.name).appendRow([taskId, studentName, title, desc, time, new Date(), unitId || "", classId || "", sid]);
       return createSuccessResponse({ taskId: taskId });
     } catch (e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
   } else { return createErrorResponse(new Error("Timeout")); }
@@ -901,22 +925,26 @@ function saveStudentPlan(studentName, unitId, planData, classId) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
+      const sid = MiraiAuth.requireUser();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.StudentPlans.name);
       const data = sheet.getDataRange().getValues();
       const json = JSON.stringify(planData);
       const now = new Date();
-      
+
+      // UPSERT キーは studentId（本人メール, col6/index5）＋unitId。同名衝突を避け、自分の行だけを更新する。
       let rowIndex = -1;
       for(let i = 1; i < data.length; i++) {
-        if(data[i][0] === studentName && data[i][1] === unitId) { rowIndex = i + 1; break; }
+        if(data[i][5] === sid && data[i][1] === unitId) { rowIndex = i + 1; break; }
       }
-      
+
       if(rowIndex > 0) {
         sheet.getRange(rowIndex, 3, 1, 2).setValues([[json, now]]);
         if(classId) sheet.getRange(rowIndex, 5).setValue(classId);
+        // 表示名は最新の申告値に合わせておく（先生の名前グループ化用）。
+        sheet.getRange(rowIndex, 1).setValue(studentName);
       } else {
-        sheet.appendRow([studentName, unitId, json, now, classId || ""]);
+        sheet.appendRow([studentName, unitId, json, now, classId || "", sid]);
       }
       return createSuccessResponse();
     } catch(e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
@@ -927,24 +955,27 @@ function saveDailyReflection(studentName, unitId, hour, achievement, comment, cl
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
+      const sid = MiraiAuth.requireUser();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.DailyReflections.name);
       const data = sheet.getDataRange().getValues();
       const now = new Date();
       const skillsJson = JSON.stringify(skills || []);
-      
+
+      // UPSERT キーは studentId（本人メール, col10/index9）＋unitId＋hour。
       let rowIndex = -1;
       for(let i = 1; i < data.length; i++) {
-        if(data[i][0] === studentName && data[i][1] === unitId && String(data[i][2]) === String(hour)) { rowIndex = i + 1; break; }
+        if(data[i][9] === sid && data[i][1] === unitId && String(data[i][2]) === String(hour)) { rowIndex = i + 1; break; }
       }
-      
+
       if(rowIndex > 0) {
         sheet.getRange(rowIndex, 4, 1, 2).setValues([[achievement, comment]]);
         sheet.getRange(rowIndex, 7).setValue(now);
         if(classId) sheet.getRange(rowIndex, 8).setValue(classId);
         sheet.getRange(rowIndex, 9).setValue(skillsJson);
+        sheet.getRange(rowIndex, 1).setValue(studentName); // 表示名を最新に
       } else {
-        sheet.appendRow([studentName, unitId, hour, achievement, comment, "", now, classId || "", skillsJson]);
+        sheet.appendRow([studentName, unitId, hour, achievement, comment, "", now, classId || "", skillsJson, sid]);
       }
       return createSuccessResponse();
     } catch(e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
@@ -955,21 +986,25 @@ function savePortfolio(studentName, unitId, summary, classId) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
+      const sid = MiraiAuth.requireUser();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
       const data = sheet.getDataRange().getValues();
       const now = new Date();
 
+      // UPSERT キーは studentId（本人メール, col8/index7）＋unitId。
       let rowIndex = -1;
       for(let i = 1; i < data.length; i++) {
-        if(data[i][0] === studentName && String(data[i][1]) === String(unitId)) { rowIndex = i + 1; break; }
+        if(data[i][7] === sid && String(data[i][1]) === String(unitId)) { rowIndex = i + 1; break; }
       }
 
       if(rowIndex > 0) {
         sheet.getRange(rowIndex, 3, 1, 2).setValues([[summary, now]]);
         if(classId) sheet.getRange(rowIndex, 5).setValue(classId);
+        sheet.getRange(rowIndex, 1).setValue(studentName); // 表示名を最新に
       } else {
-        sheet.appendRow([studentName, unitId, summary, now, classId || ""]);
+        // 末尾 studentId 列まで埋める（feedback/stamp は空、studentId はキー）
+        sheet.appendRow([studentName, unitId, summary, now, classId || "", "", "", sid]);
       }
       return createSuccessResponse();
     } catch(e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
@@ -990,7 +1025,7 @@ function sendFeedback(studentName, taskId, stamp, classId) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function savePortfolioFeedback(studentName, unitId, feedback, stamp) {
+function savePortfolioFeedback(studentName, unitId, feedback, stamp, studentId) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
@@ -998,16 +1033,23 @@ function savePortfolioFeedback(studentName, unitId, feedback, stamp) {
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
       const data = sheet.getDataRange().getValues();
+      // 本人の studentId が渡されていれば、生徒が書いたその行に確実に着地させる（同名衝突を回避）。
+      // 渡されていない場合のみ、従来どおり studentName で照合（フォールバック）。
+      const sid = String(studentId || "");
       let rowIndex = -1;
       for(let i = 1; i < data.length; i++) {
-        if(data[i][0] === studentName && String(data[i][1]) === String(unitId)) { rowIndex = i + 1; break; }
+        const match = sid
+          ? (data[i][7] === sid && String(data[i][1]) === String(unitId))
+          : (data[i][0] === studentName && String(data[i][1]) === String(unitId));
+        if(match) { rowIndex = i + 1; break; }
       }
 
       if(rowIndex > 0) {
         sheet.getRange(rowIndex, 6, 1, 2).setValues([[feedback, stamp]]);
       } else {
         const now = new Date();
-        sheet.appendRow([studentName, unitId, "", now, "", feedback, stamp]);
+        // 末尾 studentId 列まで埋める（生徒が未提出でも本人メールを残しておく）
+        sheet.appendRow([studentName, unitId, "", now, "", feedback, stamp, sid]);
       }
       return createSuccessResponse();
     } catch(e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
@@ -1022,23 +1064,30 @@ function saveAllPortfolios(feedbackList) {
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
       const data = sheet.getDataRange().getValues();
-      const rowMap = new Map();
+      // studentId（本人メール, col7）と studentName（col0）の両方でインデックスを作り、
+      // studentId が来ていればそれを優先して本人の行に着地させる（同名衝突を回避）。
+      const idMap = new Map();
+      const nameMap = new Map();
       for (let i = 1; i < data.length; i++) {
-        const key = data[i][0] + "_" + data[i][1];
-        rowMap.set(key, i);
+        if (data[i][7]) idMap.set(data[i][7] + "_" + data[i][1], i);
+        nameMap.set(data[i][0] + "_" + data[i][1], i);
       }
 
       const rowsToAppend = [];
       const now = new Date();
 
       feedbackList.forEach(item => {
-        const key = item.studentName + "_" + item.unitId;
-        if (rowMap.has(key)) {
-          const rowIndex = rowMap.get(key);
-          data[rowIndex][5] = item.feedback; 
-          data[rowIndex][6] = item.stamp;    
+        const sid = String(item.studentId || "");
+        const idKey = sid + "_" + item.unitId;
+        const nameKey = item.studentName + "_" + item.unitId;
+        let rowIndex = -1;
+        if (sid && idMap.has(idKey)) rowIndex = idMap.get(idKey);
+        else if (!sid && nameMap.has(nameKey)) rowIndex = nameMap.get(nameKey);
+        if (rowIndex >= 0) {
+          data[rowIndex][5] = item.feedback;
+          data[rowIndex][6] = item.stamp;
         } else {
-          rowsToAppend.push([item.studentName, item.unitId, "", now, "", item.feedback, item.stamp]);
+          rowsToAppend.push([item.studentName, item.unitId, "", now, "", item.feedback, item.stamp, sid]);
         }
       });
 
