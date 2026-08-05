@@ -15,64 +15,86 @@
 // ==========================================
 
 /**
- * [モーダル] 先生用ログイン画面
+ * [モーダル] 先生用ログイン
+ * サーバーが Session.getActiveUser().getEmail() で本人を判定する。
+ * クライアントはパスワードもトークンも送らず、役割だけ問い合わせる。
  */
 function attemptTeacherLogin() {
-  Swal.fire({
-    title: '教員用ログイン',
-    input: 'password',
-    inputAttributes: { autocapitalize: 'off' },
-    showCancelButton: true,
-    confirmButtonText: 'ログイン',
-    showLoaderOnConfirm: true,
-    preConfirm: (pass) => {
-      return new Promise((resolve, reject) => {
-        // サーバーでパスワード照合
-        google.script.run
-          .withSuccessHandler(res => {
-            if (res.authenticated) {
-              // 認証成功時にサーバーが発行したトークンを保持する。
-              appState.teacherToken = res.token || "";
-              resolve(true);
-            } else {
-              Swal.showValidationMessage('パスワードが違います');
-              resolve(false);
-            }
-          })
-          .withFailureHandler(e => { Swal.showValidationMessage(e.message); resolve(false); })
-          .verifyPassword(pass);
-      });
-    }
-  }).then((result) => {
-    if (result.isConfirmed && appState.teacherToken) {
-      switchMode('teacher'); // コア機能でモード切り替え
-      showToast('success', '先生モードでログインしました');
-    }
-  });
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res && res.isTeacher) {
+        switchMode('teacher'); // コア機能でモード切り替え
+        showToast('success', '先生モードでログインしました');
+      } else {
+        var email = (res && res.email) ? res.email : '';
+        Swal.fire({
+          icon: 'info',
+          title: '先生として登録されていません',
+          html: 'このGoogleアカウント（' + escapeHtml(email) + '）は先生として登録されていません。すでに先生の方に、設定画面の先生管理からあなたのメールアドレスを追加してもらってください。'
+        });
+      }
+    })
+    .withFailureHandler(handleError)
+    .getMyRole();
 }
 
-// 先生専用のサーバー呼び出し。トークンを第1引数として自動付与する。
+// 先生専用のサーバー呼び出し。呼び出し元はサーバーが自分で判定するので、トークンは付けない。
 function runTeacher(fnName, args, onSuccess, onFailure) {
   var r = google.script.run
     .withSuccessHandler(onSuccess || function(){})
     .withFailureHandler(onFailure || handleError);
-  r[fnName].apply(r, [appState.teacherToken].concat(args || []));
+  r[fnName].apply(r, args || []);
 }
 
 /**
- * [モーダル] パスワード変更
+ * [モーダル] 先生の管理（メールアドレスの許可リスト）
+ * 現在の先生一覧を表示し、追加・削除できる。
  */
-function changePasswordPrompt() {
+function openTeacherManager() {
+  runTeacher('getTeacherList', [], (res) => {
+    renderTeacherManager((res && res.teachers) || []);
+  });
+}
+
+function renderTeacherManager(teachers) {
+  var rows = (teachers || []).map(function (em) {
+    var safe = escapeHtml(em);
+    return '<li class="list-group-item d-flex justify-content-between align-items-center">' +
+      '<span>' + safe + '</span>' +
+      '<button type="button" class="btn btn-outline-danger btn-sm" data-tm-remove="' + safe + '">削除</button>' +
+      '</li>';
+  }).join('');
+  if (!rows) rows = '<li class="list-group-item text-muted">まだ先生が登録されていません。</li>';
+
   Swal.fire({
-    title: 'パスワード変更',
-    input: 'text',
-    inputLabel: '新しいパスワードを入力',
-    showCancelButton: true,
-    confirmButtonText: '変更'
-  }).then(r => {
-    if (r.isConfirmed && r.value) {
-      runTeacher('changeTeacherPassword', [r.value],
-        () => Swal.fire('完了', 'パスワードを変更しました', 'success'));
+    title: '先生の管理（メールアドレス）',
+    html:
+      '<ul class="list-group mb-3 text-start" id="tm-list">' + rows + '</ul>' +
+      '<div class="input-group">' +
+      '  <input type="email" id="tm-input" class="form-control" placeholder="teacher@example.com" autocapitalize="off">' +
+      '  <button type="button" class="btn btn-primary" id="tm-add">追加</button>' +
+      '</div>',
+    showConfirmButton: false,
+    showCloseButton: true,
+    didOpen: () => {
+      var popup = Swal.getPopup();
+      var addBtn = popup.querySelector('#tm-add');
+      var input = popup.querySelector('#tm-input');
+      if (addBtn) addBtn.addEventListener('click', function () {
+        var v = (input && input.value || '').trim();
+        if (!v) return;
+        runTeacher('addTeacherEmail', [v], (res) => {
+          renderTeacherManager((res && res.teachers) || []);
+        });
+      });
+      popup.querySelectorAll('[data-tm-remove]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var em = btn.getAttribute('data-tm-remove');
+          runTeacher('removeTeacherEmail', [em], (res) => {
+            renderTeacherManager((res && res.teachers) || []);
+          }, handleError);
+        });
+      });
     }
   });
 }

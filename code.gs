@@ -59,29 +59,65 @@ const DB_SCHEMA = {
   }
 };
 
-// === MIRAI SHARED (SERVER) 両アプリ共通・バイト単位で同一に保つこと =====================
-// 先生専用サーバー関数の本人確認。CacheService の共有キャッシュに短命トークンを置く。
-// デプロイ設定に依存しないため、本番で認可が原因で授業が止まることはない。
+// === MIRAI SHARED (SERVER) 認証・本人確認 =====================================
+// 統合方針: 全員が Google アカウントでアクセスする（デプロイ「実行:自分／アクセス:同一Workspace」）。
+// サーバーは呼び出し元を Session.getActiveUser().getEmail() で必ず自分で判定し、
+// クライアントが申告する ID を一切信用しない。これにより児童のなりすまし・IDOR が構造的に消える。
 var MiraiAuth = (function () {
-  var CACHE_PREFIX = 'mirai_tk_';
-  var TTL_SEC = 6 * 60 * 60; // 6時間
-  function _cache() { return CacheService.getScriptCache(); }
-  function issueToken() {
-    var t = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
-    _cache().put(CACHE_PREFIX + t, '1', TTL_SEC);
-    return t;
+  var TEACHER_KEY = 'TEACHER_EMAILS'; // ScriptProperties に JSON 配列で保持
+  function currentEmail() {
+    try { return String(Session.getActiveUser().getEmail() || '').trim().toLowerCase(); }
+    catch (e) { return ''; }
   }
-  function isValid(token) {
-    if (!token) return false;
-    return _cache().get(CACHE_PREFIX + String(token)) === '1';
+  function _list() {
+    try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(TEACHER_KEY) || '[]'); }
+    catch (e) { return []; }
   }
-  function requireTeacher(token) {
-    if (!isValid(token)) {
-      throw new Error('AUTH_REQUIRED: 先生の認証が必要です。もう一度ログインしてください。');
+  function _save(list) {
+    PropertiesService.getScriptProperties().setProperty(TEACHER_KEY, JSON.stringify(list));
+  }
+  function teacherEmails() { return _list(); }
+  function isTeacher() {
+    var me = currentEmail();
+    return !!me && _list().indexOf(me) !== -1;
+  }
+  function requireTeacher() {
+    if (!isTeacher()) {
+      throw new Error('AUTH_REQUIRED: 先生として登録されたGoogleアカウントでログインしてください。');
     }
   }
-  function revoke(token) { if (token) _cache().remove(CACHE_PREFIX + String(token)); }
-  return { issueToken: issueToken, isValid: isValid, requireTeacher: requireTeacher, revoke: revoke };
+  // ログイン済みの本人メールを必須にする（児童データの本人限定アクセス用）。未ログインなら例外。
+  function requireUser() {
+    var me = currentEmail();
+    if (!me) throw new Error('AUTH_REQUIRED: Googleアカウントでログインしてください。');
+    return me;
+  }
+  function addTeacher(email) {
+    var e = String(email || '').trim().toLowerCase();
+    if (!e) return _list();
+    var list = _list();
+    if (list.indexOf(e) === -1) { list.push(e); _save(list); }
+    return list;
+  }
+  function removeTeacher(email) {
+    var e = String(email || '').trim().toLowerCase();
+    var list = _list().filter(function (x) { return x !== e; });
+    _save(list);
+    return list;
+  }
+  // 初期化時のブートストラップ: 一覧が空なら、初期化を実行した本人を最初の先生にする。
+  function bootstrapFirstTeacher() {
+    if (_list().length === 0) {
+      var me = currentEmail();
+      if (me) _save([me]);
+    }
+    return _list();
+  }
+  return {
+    currentEmail: currentEmail, requireUser: requireUser,
+    isTeacher: isTeacher, requireTeacher: requireTeacher, teacherEmails: teacherEmails,
+    addTeacher: addTeacher, removeTeacher: removeTeacher, bootstrapFirstTeacher: bootstrapFirstTeacher
+  };
 })();
 
 // ==========================================
@@ -182,10 +218,6 @@ function doPost(e) {
 function getAppInitialData() {
   try {
     const ssId = PROPERTIES.getProperty('SS_ID');
-    // 初期パスワード設定（未設定時のみ）
-    if (!PROPERTIES.getProperty('TEACHER_PASS')) {
-      PROPERTIES.setProperty('TEACHER_PASS', 'admin');
-    }
     return createSuccessResponse({
       isInitialized: !!ssId,
       ssUrl: ssId ? `https://docs.google.com/spreadsheets/d/${ssId}/edit` : null
@@ -199,24 +231,23 @@ function getAppInitialData() {
  * システム初期化実行
  * 新しいスプレッドシートを作成し、IDを保存します
  */
-function initSystem(token) {
+function initSystem() {
   try {
-    // 既にシステムが存在する場合の再初期化は、先生トークンがないと拒否する。
-    // 未セットアップ（初回）はトークン不要で通す。
-    if (PROPERTIES.getProperty('SS_ID') && !MiraiAuth.isValid(token)) {
-      throw new Error('AUTH_REQUIRED: 先生の認証が必要です。もう一度ログインしてください。');
+    // 既にシステムが存在する場合の再初期化は、先生として登録されていないと拒否する。
+    // 未セットアップ（初回）は誰でも通し、その本人を最初の先生にブートストラップする。
+    var existing = PROPERTIES.getProperty('SS_ID');
+    if (existing && !MiraiAuth.isTeacher()) {
+      throw new Error('AUTH_REQUIRED: 先生として登録されたGoogleアカウントでログインしてください。');
     }
 
     let ssId = PROPERTIES.getProperty('SS_ID');
     let ss;
-    let isFirstCreate = false;
     if (ssId) {
       ss = SpreadsheetApp.openById(ssId);
     } else {
       ss = SpreadsheetApp.create('みらいコンパス_データベース');
       ssId = ss.getId();
       PROPERTIES.setProperty('SS_ID', ssId);
-      isFirstCreate = true;
     }
 
     // 全シートの存在確認と作成
@@ -226,42 +257,35 @@ function initSystem(token) {
     const defaultSheet = ss.getSheetByName('シート1');
     if (defaultSheet) ss.deleteSheet(defaultSheet);
 
-    // 初回作成時のみ既定パスワードを設定する（再初期化で admin に戻さない）。
-    if (isFirstCreate) {
-      PROPERTIES.setProperty('TEACHER_PASS', 'admin');
-    }
     // 連携トークン（Passport 等の外部書き込みの本人確認用）を未設定なら生成する。
     if (!PROPERTIES.getProperty('INTEGRATION_TOKEN')) {
       PROPERTIES.setProperty('INTEGRATION_TOKEN', (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, ''));
     }
-    return createSuccessResponse({ message: 'システムを初期化しました。初期パスワードは admin です。' });
+    // 初期化を実行した本人を最初の先生にする（一覧が空のときのみ）。
+    MiraiAuth.bootstrapFirstTeacher();
+    return createSuccessResponse({ message: 'システムを初期化しました。' });
   } catch (e) {
     return createErrorResponse(e);
   }
 }
 
-function verifyPassword(inputPass) {
-  try {
-    const currentPass = String(PROPERTIES.getProperty('TEACHER_PASS') || 'admin');
-    if (String(inputPass) === currentPass) {
-      // 認証成功時のみ、短命の先生トークンを発行して返す。
-      return createSuccessResponse({ authenticated: true, token: MiraiAuth.issueToken() });
-    }
-    return createSuccessResponse({ authenticated: false });
-  } catch (e) {
-    return createErrorResponse(e);
-  }
+// 呼び出し元の役割を返す。クライアントはこの結果で先生モードに入れるかを判断する。
+function getMyRole() {
+  return { email: MiraiAuth.currentEmail(), isTeacher: MiraiAuth.isTeacher(), teacherCount: MiraiAuth.teacherEmails().length };
 }
-
-function changeTeacherPassword(token, newPass) {
-  try {
-    MiraiAuth.requireTeacher(token);
-    if (!newPass) throw new Error("パスワードが空です");
-    PROPERTIES.setProperty('TEACHER_PASS', String(newPass));
-    return createSuccessResponse();
-  } catch (e) {
-    return createErrorResponse(e);
-  }
+function getTeacherList() {
+  MiraiAuth.requireTeacher();
+  return createSuccessResponse({ teachers: MiraiAuth.teacherEmails() });
+}
+function addTeacherEmail(email) {
+  MiraiAuth.requireTeacher();
+  return createSuccessResponse({ teachers: MiraiAuth.addTeacher(email) });
+}
+function removeTeacherEmail(email) {
+  MiraiAuth.requireTeacher();
+  var me = MiraiAuth.currentEmail();
+  if (String(email || '').trim().toLowerCase() === me) throw new Error('自分自身は削除できません。');
+  return createSuccessResponse({ teachers: MiraiAuth.removeTeacher(email) });
 }
 
 // ==========================================
@@ -598,11 +622,11 @@ function updateLiveStatusFromPassport(data) {
 
 // --- 先生用管理機能（ロック推奨） ---
 
-function updateUnitTask(token, taskId, updateData) {
+function updateUnitTask(taskId, updateData) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
       const data = sheet.getDataRange().getValues();
@@ -634,11 +658,11 @@ function updateUnitTask(token, taskId, updateData) {
   }
 }
 
-function addUnitTask(token, unitId, taskData) {
+function addUnitTask(unitId, taskData) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
       // 単元の基本情報を取得するために検索
@@ -663,11 +687,11 @@ function addUnitTask(token, unitId, taskData) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function deleteUnitTask(token, taskId) {
+function deleteUnitTask(taskId) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
       const data = sheet.getDataRange().getValues();
@@ -685,11 +709,11 @@ function deleteUnitTask(token, taskId) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function createNewUnit(token, unitInfo) {
+function createNewUnit(unitInfo) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
 
@@ -713,11 +737,11 @@ function createNewUnit(token, unitInfo) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function updateUnitBasicInfo(token, unitId, infoData) {
+function updateUnitBasicInfo(unitId, infoData) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
       const data = sheet.getDataRange().getValues();
@@ -740,11 +764,11 @@ function updateUnitBasicInfo(token, unitId, infoData) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function updateUnitTotalHours(token, unitId, newTotalHours) {
+function updateUnitTotalHours(unitId, newTotalHours) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
       const data = sheet.getDataRange().getValues();
@@ -767,11 +791,11 @@ function updateUnitTotalHours(token, unitId, newTotalHours) {
 
 // [改修] 名簿保存処理をオブジェクト配列対応に変更
 
-function saveClassRoster(token, classId, studentList) {
+function saveClassRoster(classId, studentList) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(10000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.StudentRoster.name);
       const data = sheet.getDataRange().getValues();
@@ -798,11 +822,11 @@ function saveClassRoster(token, classId, studentList) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function saveSeatCoordinates(token, coordinates) {
+function saveSeatCoordinates(coordinates) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.LiveStatus.name);
       const data = sheet.getDataRange().getValues();
@@ -818,11 +842,11 @@ function saveSeatCoordinates(token, coordinates) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function saveClassSchedule(token, scheduleData) {
+function saveClassSchedule(scheduleData) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.ClassSchedule.name);
       sheet.appendRow([
@@ -930,11 +954,11 @@ function savePortfolio(studentName, unitId, summary, classId) {
 
 // --- フィードバック・評価 ---
 
-function sendFeedback(token, studentName, taskId, stamp, classId) {
+function sendFeedback(studentName, taskId, stamp, classId) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       ss.getSheetByName(DB_SCHEMA.Feedback.name).appendRow([Utilities.getUuid(), studentName, taskId, stamp, new Date(), classId || ""]);
       return createSuccessResponse();
@@ -942,11 +966,11 @@ function sendFeedback(token, studentName, taskId, stamp, classId) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function savePortfolioFeedback(token, studentName, unitId, feedback, stamp) {
+function savePortfolioFeedback(studentName, unitId, feedback, stamp) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
       const data = sheet.getDataRange().getValues();
@@ -966,11 +990,11 @@ function savePortfolioFeedback(token, studentName, unitId, feedback, stamp) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function saveAllPortfolios(token, feedbackList) {
+function saveAllPortfolios(feedbackList) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(10000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
       const data = sheet.getDataRange().getValues();
@@ -1011,11 +1035,11 @@ function saveAllPortfolios(token, feedbackList) {
 
 // JSONインポート、アーカイブ、Passport連携など
 
-function importUnitJson(token, jsonStr) {
+function importUnitJson(jsonStr) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(10000)) {
     try {
-      MiraiAuth.requireTeacher(token);
+      MiraiAuth.requireTeacher();
       const ssId = PROPERTIES.getProperty('SS_ID');
       if (!ssId) throw new Error('初期設定未完了');
       const ss = SpreadsheetApp.openById(ssId);
@@ -1049,11 +1073,11 @@ function importUnitJson(token, jsonStr) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function archiveUnitData(token, unitId, unitTitle) {
+function archiveUnitData(unitId, unitTitle) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) { return createErrorResponse(new Error("Timeout")); }
   try {
-    MiraiAuth.requireTeacher(token);
+    MiraiAuth.requireTeacher();
     const ss = getSpreadsheet();
     const archiveName = `アーカイブ_${unitTitle || unitId}_${Utilities.formatDate(new Date(), 'JST', 'yyyyMMdd')}`;
     const archiveSs = SpreadsheetApp.create(archiveName);
@@ -1127,9 +1151,9 @@ function getCustomAiPrompt() {
   } catch (e) { return createErrorResponse(e); }
 }
 
-function saveCustomAiPrompt(token, text) {
+function saveCustomAiPrompt(text) {
   try {
-    MiraiAuth.requireTeacher(token);
+    MiraiAuth.requireTeacher();
     PROPERTIES.setProperty('CUSTOM_AI_PROMPT', text);
     return createSuccessResponse();
   } catch (e) { return createErrorResponse(e); }
@@ -1139,16 +1163,16 @@ function getPassportDbId() { return PROPERTIES.getProperty('PASSPORT_DB_ID') || 
 function getPassportUrl() { return PROPERTIES.getProperty('PASSPORT_WEB_APP_URL') || ""; }
 
 // 先生だけが読める連携トークン。パスポート側の設定に転記するために使う。
-function getIntegrationToken(token) {
+function getIntegrationToken() {
   try {
-    MiraiAuth.requireTeacher(token);
+    MiraiAuth.requireTeacher();
     return createSuccessResponse({ integrationToken: PROPERTIES.getProperty('INTEGRATION_TOKEN') || "" });
   } catch (e) { return createErrorResponse(e); }
 }
 
-function savePassportConfig(token, dbId, url) {
+function savePassportConfig(dbId, url) {
   try {
-    MiraiAuth.requireTeacher(token);
+    MiraiAuth.requireTeacher();
     PROPERTIES.setProperty('PASSPORT_DB_ID', dbId);
     PROPERTIES.setProperty('PASSPORT_WEB_APP_URL', url);
     return createSuccessResponse();

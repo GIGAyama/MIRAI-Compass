@@ -132,8 +132,7 @@ let appState = {
   unitList: [],       // 全単元のリスト
   schedules: [],      // 配信されたスケジュール通知
   passportUrl: "",    // みらいパスポート（外部連携アプリ）のURL
-  passportDbId: "",   // みらいパスポートの連携用DB ID
-  teacherToken: ""    // 先生ログイン時に発行される短命トークン（先生専用サーバー関数で使用）
+  passportDbId: ""    // みらいパスポートの連携用DB ID
 };
 
 // データベースから取得したデータの格納庫
@@ -292,7 +291,7 @@ function startInitialization() {
       } else handleError({ message: r.error });
     })
     .withFailureHandler(handleError)
-    .initSystem(appState.teacherToken || "");
+    .initSystem();
 }
 
 // ==========================================
@@ -425,11 +424,6 @@ function changeUnit(unitId) {
  */
 function switchMode(newMode) {
   appState.mode = newMode;
-
-  // 生徒モードへ移る（＝先生モードを抜ける）ときは先生トークンを破棄する。
-  if (newMode !== 'teacher') {
-    appState.teacherToken = "";
-  }
 
   // 生徒モードへの切り替え時はデータを再取得して最新状態にする
   if(newMode === 'student') {
@@ -847,7 +841,7 @@ function toggleSettings() {
         <input type="text" id="swal-passport-db-id" class="form-control mb-3" placeholder="スプレッドシートID" value="${escapeHtml(appState.passportDbId || '')}">
         
         <div class="d-grid gap-2">
-          <button class="btn btn-outline-secondary btn-sm" onclick="changePasswordPrompt()">教員パスワード変更</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="openTeacherManager()">先生の管理（メールアドレス）</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="openRosterManagerModal()">名簿管理</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="showIntegrationToken()">パスポート連携キーを表示</button>
         </div>
