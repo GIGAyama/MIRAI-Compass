@@ -341,9 +341,9 @@ function createStudentTaskCard(t) {
   // 先生からのスタンプ表示
   let stampHtml = stamp ? `<div class="stamp-badge animate__animated animate__bounceIn">${{'check':'✅','good':'👍','great':'💮','support':'🚩'}[stamp]||''}</div>` : '';
   
-  // Passportボタン
+  // ワークシートボタン（児童用フォーマットのタスクで表示）
   let passportBtn = '';
-  if (t.format !== 'teacher' && t.category !== 'マイタスク' && appState.passportUrl) {
+  if (t.format !== 'teacher' && t.category !== 'マイタスク') {
     passportBtn = `<button class="btn btn-primary rounded-pill px-3 btn-sm fw-bold me-1 shadow-sm" onclick="event.stopPropagation(); launchPassport('${escJs(t.taskId)}')" title="みらいパスポートで学習する"><i class="bi bi-rocket-takeoff-fill" aria-hidden="true"></i></button>`;
   }
 
@@ -813,9 +813,9 @@ function openTaskDetailModal(taskId) {
     }
   });
 
-  // みらいパスポート起動ボタン
+  // ワークシート起動ボタン（児童用フォーマットのタスクで表示）
   let passportLauncherHtml = '';
-  if (t.format !== 'teacher' && t.category !== 'マイタスク' && appState.passportUrl) {
+  if (t.format !== 'teacher' && t.category !== 'マイタスク') {
     passportLauncherHtml = `
       <div class="mt-4 pt-3 border-top text-center">
         <button class="btn btn-outline-primary rounded-pill w-100 fw-bold shadow-sm" onclick="launchPassport('${escJs(taskId)}')">

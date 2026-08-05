@@ -834,8 +834,8 @@ function renderTeacherDesignView(container) {
           <button class="btn btn-outline-secondary" onclick="changeUnitTotalHours(1)"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
           <button class="btn btn-outline-secondary" onclick="changeUnitTotalHours(-1)"><i class="bi bi-dash-lg" aria-hidden="true"></i></button>
         </div>
-        <button class="btn btn-primary btn-sm rounded-pill px-3 shadow-sm" onclick="syncUnitToPassport()" title="みらいパスポートでワークシートを作成">
-          <i class="bi bi-rocket-takeoff-fill me-2"></i>WS作成連携
+        <button class="btn btn-primary btn-sm rounded-pill px-3 shadow-sm" onclick="createWorksheetsForCurrentUnit()" title="この単元のワークシートを用意する">
+          <i class="bi bi-rocket-takeoff-fill me-2"></i>WS作成
         </button>
       </div>
     </div>
@@ -1321,37 +1321,11 @@ function submitImportJson() {
     handleError);
 }
 
-// [連携] パスポートへ単元計画を送信
-function syncUnitToPassport() {
-  if (!appState.passportDbId || !appState.passportUrl) {
-    Swal.fire({ icon: 'warning', title: '連携未設定', text: '「みらいパスポート」の設定が完了していません。右上の設定ボタンから登録してください。' });
-    return;
-  }
-
-  Swal.fire({
-    title: 'ワークシート作成連携',
-    text: `現在の単元「${appState.unit.title}」の計画データをパスポートへ送信し、ワークシートを一括作成しますか？`,
-    icon: 'question',
-    showCancelButton: true,
-    confirmButtonColor: '#1a73e8',
-    confirmButtonText: '送信して作成開始'
-  }).then((result) => {
-    if (result.isConfirmed) {
-      showLoading();
-      google.script.run
-        .withSuccessHandler(res => {
-          hideLoading();
-          if (res.success) {
-            Swal.fire({ title: '連携成功', text: 'みらいパスポートを開きます。', icon: 'success', timer: 2000, showConfirmButton: false });
-            if (res.passportUrl) window.open(res.passportUrl, '_blank');
-          } else {
-            handleError({ message: res.message || '連携に失敗しました' });
-          }
-        })
-        .withFailureHandler(handleError)
-        .sendUnitPlanToPassport_DirectDB(appState.unit.id);
-    }
-  });
+// [統合] この単元の児童用タスクにワークシート（Worksheets シート）の器を用意する
+function createWorksheetsForCurrentUnit() {
+  runTeacher('createWorksheetsForUnit', [appState.unit.id],
+    res => Swal.fire('作成しました', (res && res.created != null ? res.created : '') + '件のワークシートを用意しました。', 'success'),
+    handleError);
 }
 
 // ==========================================
