@@ -849,6 +849,7 @@ function toggleSettings() {
         <div class="d-grid gap-2">
           <button class="btn btn-outline-secondary btn-sm" onclick="changePasswordPrompt()">教員パスワード変更</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="openRosterManagerModal()">名簿管理</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="showIntegrationToken()">パスポート連携キーを表示</button>
         </div>
       </div>
     `,
@@ -879,6 +880,29 @@ function toggleSettings() {
         handleError);
     }
   });
+}
+
+/**
+ * [機能] みらいパスポートへ貼り付ける「連携キー」(INTEGRATION_TOKEN) を表示する。
+ * doPost はこのキーの一致を要求するため、パスポート側の設定に登録すると
+ * SOS・状態通知の受信が有効になる。先生専用（トークン付きで取得）。
+ */
+function showIntegrationToken() {
+  runTeacher('getIntegrationToken', [], (res) => {
+    const tok = (res && res.integrationToken) ? res.integrationToken : '';
+    if (!tok) {
+      Swal.fire('未発行', '連携キーはシステム初期化時に発行されます。先生モードで初期設定を実行してください。', 'info');
+      return;
+    }
+    Swal.fire({
+      title: 'パスポート連携キー',
+      html: `
+        <p class="small text-start">みらいパスポートの先生設定にある「Compass 連携キー」に、下の値を貼り付けてください。</p>
+        <input type="text" class="form-control text-center" readonly value="${escapeHtml(tok)}" onclick="this.select()">
+        <p class="small text-muted text-start mt-2">このキーを知る相手だけが状態通知を送れます。むやみに共有しないでください。</p>`,
+      confirmButtonText: '閉じる'
+    });
+  }, handleError);
 }
 
 /**
