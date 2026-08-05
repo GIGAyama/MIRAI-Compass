@@ -15,20 +15,33 @@
   <!-- ブラウザのタブに表示されるアイコン（コンパスのマーク） -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%231a73e8' class='bi bi-compass-fill' viewBox='0 0 16 16'%3E%3Cpath d='M15.5 8.516a7.5 7.5 0 1 1-9.462-7.24A7.5 7.5 0 0 1 15.5 8.516zM6.95.435c.58-.58 1.52-.58 2.1 0l6.515 6.516c.58.58.58 1.519 0 2.098L9.05 15.565c-.58.58-1.519.58-2.098 0L.435 9.05a1.482 1.482 0 0 1 0-2.098L6.95.435zM8 12v-3.5l-3.5.5L8 12zm0-9v3.5l3.5-.5L8 3z'/%3E%3C/svg%3E">
   
-  <!-- 
-    === 外部ライブラリの読み込み ===
-    デザインや機能を整えるための便利な道具（ライブラリ）をインターネットから読み込んでいます。
+  <!--
+    === ライブラリの読み込み（すべて自分側に持っています） ===
+    以前は cdn.jsdelivr.net から読んでいましたが、学校のネットワークが
+    そこを塞いでいると「Bootstrap が当たっていない素の HTML が半分だけ動く」
+    という壊れ方をしました。ローディング画面が消えず、d-none が効かないので
+    児童画面と先生用ボタンが同時に出て、Swal / Chart / Sortable がすべて
+    undefined になります。原因がアプリの外にあるので先生が調べても分かりません。
+    そのため実行コードは1バイトも外から取りません。
+
+    ⚠️ vendor_*.html は tools/build-vendor.mjs の生成物です。手で編集しないでください。
+       ライブラリの版を変えるときは package.json を直して `npm run build` を実行します。
   -->
-  <!-- デザインの基本セット (Bootstrap 5) -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <!-- アイコンセット (Bootstrap Icons) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-  
-  <!-- フォント: Zen Maru Gothic (子供にも読みやすい丸ゴシック体) -->
+  <?!= include('vendor_css'); ?>
+  <?!= include('vendor_icons'); ?>
+
+  <!--
+    フォント: Zen Maru Gothic (子供にも読みやすい丸ゴシック体)
+    これは「見た目だけ」の依存です。学校のフィルタリングで届かなくても、
+    css.html で端末側の日本語フォントを後ろに並べてあるので、
+    字の形が変わるだけでアプリは動きます。だから自己ホストしません
+    （日本語フォントの自己ホストは初回転送が数MBになり、校内Wi-Fiで
+      40人が同時に開くという、いちばん避けたい状況を自分で作ります）。
+  -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
-  
+
   <!-- 
     === CSS（デザイン定義）の読み込み ===
     別ファイルの 'css.html' をここに埋め込みます。
@@ -107,13 +120,15 @@
     <a href="#" class="text-decoration-none text-muted small" style="font-size:0.75rem;" onclick="attemptTeacherLogin(); return false;">教員用ログイン</a>
   </footer>
 
-  <!-- 
-    === JavaScriptライブラリの読み込み ===
+  <!--
+    === JavaScriptライブラリの読み込み（自己ホスト） ===
+    Bootstrap（モーダル・タブ）／SweetAlert2（ポップアップ）／
+    Chart.js（レーダーチャート）／Sortable（計画づくりのドラッグ操作）。
+    以前は版を固定していないものが2本ありました
+    （sweetalert2@11 はメジャー内で勝手に上がり、chart.js は版指定すら無し）。
+    いまは package.json で固定し、npm から取った実バイトを vendor_js.html に包んでいます。
   -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script> <!-- ポップアップ画面用 -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>       <!-- グラフ描画用 -->
-  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script> <!-- ドラッグ操作用 -->
+  <?!= include('vendor_js'); ?>
 
   <!-- 
     === アプリケーションロジックの読み込み ===
