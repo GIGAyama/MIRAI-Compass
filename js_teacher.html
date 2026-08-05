@@ -15,64 +15,192 @@
 // ==========================================
 
 /**
- * [モーダル] 先生用ログイン画面
+ * [モーダル] 先生用ログイン
+ * サーバーが Session.getActiveUser().getEmail() で本人を判定する。
+ * クライアントはパスワードもトークンも送らず、役割だけ問い合わせる。
  */
 function attemptTeacherLogin() {
-  Swal.fire({
-    title: '教員用ログイン',
-    input: 'password',
-    inputAttributes: { autocapitalize: 'off' },
-    showCancelButton: true,
-    confirmButtonText: 'ログイン',
-    showLoaderOnConfirm: true,
-    preConfirm: (pass) => {
-      return new Promise((resolve, reject) => {
-        // サーバーでパスワード照合
-        google.script.run
-          .withSuccessHandler(res => {
-            if (res.authenticated) {
-              // 認証成功時にサーバーが発行したトークンを保持する。
-              appState.teacherToken = res.token || "";
-              resolve(true);
-            } else {
-              Swal.showValidationMessage('パスワードが違います');
-              resolve(false);
-            }
-          })
-          .withFailureHandler(e => { Swal.showValidationMessage(e.message); resolve(false); })
-          .verifyPassword(pass);
-      });
-    }
-  }).then((result) => {
-    if (result.isConfirmed && appState.teacherToken) {
-      switchMode('teacher'); // コア機能でモード切り替え
-      showToast('success', '先生モードでログインしました');
-    }
-  });
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res && res.isTeacher) {
+        switchMode('teacher'); // コア機能でモード切り替え
+        showToast('success', '先生モードでログインしました');
+      } else {
+        var email = (res && res.email) ? res.email : '';
+        Swal.fire({
+          icon: 'info',
+          title: '先生として登録されていません',
+          html: 'このGoogleアカウント（' + escapeHtml(email) + '）は先生として登録されていません。すでに先生の方に、設定画面の先生管理からあなたのメールアドレスを追加してもらってください。'
+        });
+      }
+    })
+    .withFailureHandler(handleError)
+    .getMyRole();
 }
 
-// 先生専用のサーバー呼び出し。トークンを第1引数として自動付与する。
+// 先生専用のサーバー呼び出し。呼び出し元はサーバーが自分で判定するので、トークンは付けない。
 function runTeacher(fnName, args, onSuccess, onFailure) {
   var r = google.script.run
     .withSuccessHandler(onSuccess || function(){})
     .withFailureHandler(onFailure || handleError);
-  r[fnName].apply(r, [appState.teacherToken].concat(args || []));
+  r[fnName].apply(r, args || []);
+}
+
+// ==========================================
+//  ワークシート統合（js_worksheet.html への橋渡し）
+// ==========================================
+
+/**
+ * [モーダル] AI設定（Geminiキー・先生名）
+ * getAiConfig() で現在の設定状態を読み、saveAiConfig(key,name) で保存する。
+ * キーは空欄なら変更なし（サーバー側で既存を保持）。
+ */
+function openAiSettings() {
+  runTeacher('getAiConfig', [], function(cfg) {
+    cfg = cfg || {};
+    Swal.fire({
+      title: 'AI設定（Geminiキー）',
+      html:
+        '<div class="text-start">'
+        + '  <div class="mb-3">'
+        + '    <label class="form-label small fw-bold">Gemini APIキー</label>'
+        + '    <input type="password" id="ai-key" class="form-control" autocomplete="off" placeholder="変更するときだけ入力">'
+        + '    <div class="form-text small">現在: ' + (cfg.hasApiKey ? '<span class="text-success fw-bold">設定済み</span>' : '<span class="text-danger">未設定</span>') + ' ／ 空欄のまま保存すると変更されません。</div>'
+        + '  </div>'
+        + '  <div class="mb-1">'
+        + '    <label class="form-label small fw-bold">先生の名前</label>'
+        + '    <input type="text" id="ai-name" class="form-control" value="' + escapeHtml(cfg.teacherName || '') + '">'
+        + '  </div>'
+        + '</div>',
+      showCancelButton: true,
+      confirmButtonText: '保存',
+      cancelButtonText: '閉じる',
+      preConfirm: function() {
+        return {
+          key: (document.getElementById('ai-key') || {}).value || '',
+          name: (document.getElementById('ai-name') || {}).value || ''
+        };
+      }
+    }).then(function(r) {
+      if (!r.isConfirmed) return;
+      runTeacher('saveAiConfig', [r.value.key, r.value.name], function() {
+        showToast('success', 'AI設定を保存しました');
+      });
+    });
+  });
 }
 
 /**
- * [モーダル] パスワード変更
+ * タスク編集モーダルから「ワークシート作成・編集」を開く。
+ * @param {string} taskId 対象タスクID
  */
-function changePasswordPrompt() {
+function openWorksheetEditorForTask(taskId) {
+  var t = (dataStore.masterTasks || []).find(function(x){ return x.taskId === taskId; });
+  if (!t) { handleError({ message: '課題が見つかりません' }); return; }
+  Swal.close();
+  Worksheet.openTeacherEditor(t);
+}
+
+/**
+ * タスクの提出物一覧を表示し、選んだ提出物の添削（赤ペン）画面を開く。
+ * getTaskSubmissions → 一覧、行クリックで Worksheet.openGrading。
+ * @param {string} taskId 対象タスクID
+ */
+function openWorksheetSubmissions(taskId) {
+  Swal.close();
+  showLoading();
+  runTeacher('getTaskSubmissions', [taskId], function(subs) {
+    hideLoading();
+    subs = subs || [];
+    window._wsSubmissions = subs;
+    if (subs.length === 0) {
+      Swal.fire('提出物なし', 'まだ提出された回答はありません。', 'info');
+      return;
+    }
+    var rows = subs.map(function(s, i) {
+      var badge = (s.status === 'graded')
+        ? '<span class="badge bg-primary">添削済</span>'
+        : '<span class="badge bg-success">提出済</span>';
+      var when = s.submittedAt ? new Date(s.submittedAt).toLocaleString() : '';
+      return '<button type="button" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" '
+        + 'data-ws-sub="' + i + '">'
+        + '<span class="fw-bold text-truncate">' + escapeHtml(s.studentName || '名無し') + '</span>'
+        + '<span class="d-flex align-items-center gap-2">' + badge + '<small class="text-muted">' + escapeHtml(when) + '</small></span>'
+        + '</button>';
+    }).join('');
+    Swal.fire({
+      title: '提出物（' + subs.length + '件）',
+      html: '<div class="list-group text-start" id="ws-sub-list">' + rows + '</div>',
+      showConfirmButton: false,
+      showCloseButton: true,
+      width: '600px',
+      didOpen: function() {
+        var popup = Swal.getPopup();
+        popup.querySelectorAll('[data-ws-sub]').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var idx = parseInt(btn.getAttribute('data-ws-sub'), 10);
+            var sub = window._wsSubmissions[idx];
+            Swal.close();
+            Worksheet.openGrading(sub);
+          });
+        });
+      }
+    });
+  }, function(err) {
+    hideLoading();
+    handleError(err);
+  });
+}
+
+/**
+ * [モーダル] 先生の管理（メールアドレスの許可リスト）
+ * 現在の先生一覧を表示し、追加・削除できる。
+ */
+function openTeacherManager() {
+  runTeacher('getTeacherList', [], (res) => {
+    renderTeacherManager((res && res.teachers) || []);
+  });
+}
+
+function renderTeacherManager(teachers) {
+  var rows = (teachers || []).map(function (em) {
+    var safe = escapeHtml(em);
+    return '<li class="list-group-item d-flex justify-content-between align-items-center">' +
+      '<span>' + safe + '</span>' +
+      '<button type="button" class="btn btn-outline-danger btn-sm" data-tm-remove="' + safe + '">削除</button>' +
+      '</li>';
+  }).join('');
+  if (!rows) rows = '<li class="list-group-item text-muted">まだ先生が登録されていません。</li>';
+
   Swal.fire({
-    title: 'パスワード変更',
-    input: 'text',
-    inputLabel: '新しいパスワードを入力',
-    showCancelButton: true,
-    confirmButtonText: '変更'
-  }).then(r => {
-    if (r.isConfirmed && r.value) {
-      runTeacher('changeTeacherPassword', [r.value],
-        () => Swal.fire('完了', 'パスワードを変更しました', 'success'));
+    title: '先生の管理（メールアドレス）',
+    html:
+      '<ul class="list-group mb-3 text-start" id="tm-list">' + rows + '</ul>' +
+      '<div class="input-group">' +
+      '  <input type="email" id="tm-input" class="form-control" placeholder="teacher@example.com" autocapitalize="off">' +
+      '  <button type="button" class="btn btn-primary" id="tm-add">追加</button>' +
+      '</div>',
+    showConfirmButton: false,
+    showCloseButton: true,
+    didOpen: () => {
+      var popup = Swal.getPopup();
+      var addBtn = popup.querySelector('#tm-add');
+      var input = popup.querySelector('#tm-input');
+      if (addBtn) addBtn.addEventListener('click', function () {
+        var v = (input && input.value || '').trim();
+        if (!v) return;
+        runTeacher('addTeacherEmail', [v], (res) => {
+          renderTeacherManager((res && res.teachers) || []);
+        });
+      });
+      popup.querySelectorAll('[data-tm-remove]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var em = btn.getAttribute('data-tm-remove');
+          runTeacher('removeTeacherEmail', [em], (res) => {
+            renderTeacherManager((res && res.teachers) || []);
+          }, handleError);
+        });
+      });
     }
   });
 }
@@ -104,6 +232,7 @@ function renderTeacherView() {
             <button class="btn btn-sm ${appState.view.teacher === 'heatmap' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('heatmap')">一覧</button>
             <button class="btn btn-sm ${appState.view.teacher === 'seating' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('seating')">座席</button>
             <button class="btn btn-sm ${appState.view.teacher === 'summaries' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('summaries')">まとめ</button>
+            <button class="btn btn-sm ${appState.view.teacher === 'dashboard' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('dashboard')"><i class="bi bi-check2-square me-1"></i>添削</button>
             <button class="btn btn-sm ${appState.view.teacher === 'design' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('design')"><i class="bi bi-pencil-ruler me-1"></i>設計</button>
             <button class="btn btn-sm ${appState.view.teacher === 'control' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('control')">進行</button>
           </div>
@@ -164,8 +293,9 @@ function renderTeacherDashboardContent() {
   if (appState.view.teacher === 'summaries') { renderSummaryListView(el); if(scrollPos>0) el.scrollTop = scrollPos; return; }
   if (appState.view.teacher === 'seating') { renderSeatingView(el); return; }
   if (appState.view.teacher === 'control') { renderControlView(el); return; }
-  if (appState.view.teacher === 'design') { renderTeacherDesignView(el); return; } 
-  
+  if (appState.view.teacher === 'design') { renderTeacherDesignView(el); return; }
+  if (appState.view.teacher === 'dashboard') { renderTeacherDashboardView(el); return; }
+
   const targetStudents = getFilteredStudents();
   if (appState.view.teacher === 'cards') {
     renderLiveCards(el, targetStudents);
@@ -566,6 +696,7 @@ function renderSummaryListView(container) {
     const summary = pf.summary || "";
     const feedback = pf.feedback || "";
     const stamp = pf.stamp || "";
+    const pfStudentId = pf.studentId || ""; // 本人メール（あれば本人の行にフィードバックを着地させる）
 
     // スキル集計
     const skillCounts = {};
@@ -617,7 +748,7 @@ function renderSummaryListView(container) {
           </div>
           <div class="input-group input-group-sm">
             <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${escapeHtml(feedback)}">
-            <button id="btn-save-${uniqueId}" class="btn btn-primary" onclick="saveListFeedback('${escJs(s.name)}', '${uniqueId}')">保存</button>
+            <button id="btn-save-${uniqueId}" class="btn btn-primary" onclick="saveListFeedback('${escJs(s.name)}', '${uniqueId}', '${escJs(pfStudentId)}')">保存</button>
           </div>
         </td>
       </tr>`;
@@ -649,18 +780,18 @@ function renderSummaryListView(container) {
     </div>`;
 }
 
-function saveListFeedback(studentName, uniqueId) {
+function saveListFeedback(studentName, uniqueId, studentId) {
   const comment = document.getElementById(`fb-text-${uniqueId}`).value;
   const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
   const stamp = stampEl ? stampEl.value : "";
-  
+
   const btn = document.getElementById(`btn-save-${uniqueId}`);
   const originalText = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '...';
-  
-  // サーバーへ保存
-  runTeacher('savePortfolioFeedback', [studentName, appState.unit.id, comment, stamp],
+
+  // サーバーへ保存（studentId があれば本人の行に着地。無ければサーバー側で studentName にフォールバック）
+  runTeacher('savePortfolioFeedback', [studentName, appState.unit.id, comment, stamp, studentId || ''],
     () => {
       showToast('success', '保存しました');
       btn.disabled = false;
@@ -689,8 +820,14 @@ function saveAllListFeedbacks() {
     const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
     
     if (commentInput) {
+      // 本人メール（あれば）を添えて、先生フィードバックを本人の行へ確実に着地させる。
+      let sid = "";
+      if (dataStore.clsPortfolios && dataStore.clsPortfolios[s.name] && dataStore.clsPortfolios[s.name][appState.unit.id]) {
+        sid = dataStore.clsPortfolios[s.name][appState.unit.id].studentId || "";
+      }
       feedbackList.push({
         studentName: s.name,
+        studentId: sid,
         unitId: appState.unit.id,
         feedback: commentInput.value,
         stamp: stampEl ? stampEl.value : ""
@@ -709,6 +846,417 @@ function saveAllListFeedbacks() {
       btn.disabled = false;
       btn.innerHTML = originalHtml;
     });
+}
+
+// ==========================================
+//  3.5 添削ダッシュボード (Teacher Submissions Dashboard / Phase H)
+// ==========================================
+//  提出物の一覧・絞り込み・並べ替え・添削（赤ペン / クイックコメント）・AI一括コメント。
+//  データは getDashboardData を一度だけ取得して dashboardCache に保持し、
+//  絞り込み・並べ替えはすべてクライアント側で再描画する（キー入力ごとの再取得はしない）。
+
+// --- モジュール状態（先生ダッシュボード専用） ---
+var dashboardCache = null;                 // { submissions:[...], worksheets:[...] } 取得結果のキャッシュ
+var dashboardFilter = { taskId: 'all', status: 'all', name: '', sort: 'submittedAt' };
+var dashboardBatch = null;                 // AI 一括コメントのレビュー中データ（配列）または null
+var dashboardBatchTitle = '';              // AI 一括レビューの見出し（授業名）
+
+// 入力中（input/textarea/select/contentEditable）ならキーボード操作を横取りしない
+function isDashTypingTarget(t) {
+  if (!t) return false;
+  if (t.isContentEditable) return true;
+  var tag = (t.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select';
+}
+
+// キャッシュから該当行の提出物を探す
+function findDashSub(rowIndex) {
+  var subs = (dashboardCache && dashboardCache.submissions) || [];
+  for (var i = 0; i < subs.length; i++) {
+    if (String(subs[i].rowIndex) === String(rowIndex)) return subs[i];
+  }
+  return null;
+}
+
+// 未提出（draft/空）を除いた対象提出物。提出ずみ・添削ずみのみ。
+function dashboardEligible() {
+  var subs = (dashboardCache && dashboardCache.submissions) || [];
+  return subs.filter(function (s) {
+    var n = MiraiShared.normSubmission(s.status);
+    return n === 'submitted' || n === 'graded';
+  });
+}
+
+// 授業（taskId）と 名前 での絞り込みだけを適用（状態バッジ集計に使う）
+function dashboardFilteredByTaskName() {
+  var name = (dashboardFilter.name || '').trim().toLowerCase();
+  return dashboardEligible().filter(function (s) {
+    if (dashboardFilter.taskId !== 'all' && String(s.taskId) !== String(dashboardFilter.taskId)) return false;
+    if (name && String(s.studentName || '').toLowerCase().indexOf(name) < 0) return false;
+    return true;
+  });
+}
+
+function dashStatusRank(s) {
+  return MiraiShared.normSubmission(s.status) === 'graded' ? 1 : 0; // 未添削(0) を先に
+}
+
+// 表示するカード用に、状態絞り込み＋並べ替えまで適用した配列
+function dashboardVisible() {
+  var list = dashboardFilteredByTaskName();
+  if (dashboardFilter.status === 'submitted') {
+    list = list.filter(function (s) { return MiraiShared.normSubmission(s.status) === 'submitted'; });
+  } else if (dashboardFilter.status === 'graded') {
+    list = list.filter(function (s) { return MiraiShared.normSubmission(s.status) === 'graded'; });
+  }
+  list = list.slice();
+  var sort = dashboardFilter.sort;
+  list.sort(function (a, b) {
+    if (sort === 'name') {
+      return String(a.studentName || '').localeCompare(String(b.studentName || ''), 'ja');
+    }
+    if (sort === 'status') {
+      var r = dashStatusRank(a) - dashStatusRank(b);
+      if (r !== 0) return r;
+      return (b.submittedAt || 0) - (a.submittedAt || 0);
+    }
+    return (b.submittedAt || 0) - (a.submittedAt || 0); // 提出日時の新しい順
+  });
+  return list;
+}
+
+/**
+ * [画面描画] 添削ダッシュボードの本体。
+ * 初回は getDashboardData を取得してキャッシュ。以降は全てクライアント再描画。
+ */
+function renderTeacherDashboardView(el) {
+  if (!el) return;
+  el.className = 'flex-grow-1 p-3 overflow-auto d-flex flex-column';
+
+  // 初回のみサーバーから取得
+  if (dashboardCache === null) {
+    el.innerHTML = '<div class="text-center p-5 text-muted"><span class="spinner-border spinner-border-sm me-2"></span>提出物を読み込み中...</div>';
+    runTeacher('getDashboardData', [], function (res) {
+      dashboardCache = {
+        submissions: (res && res.submissions) || [],
+        worksheets: (res && res.worksheets) || []
+      };
+      // 直前に選んでいた授業がもう無ければ全てに戻す（自己リセットではなく整合性の担保）
+      if (dashboardFilter.taskId !== 'all') {
+        var exists = dashboardCache.worksheets.some(function (w) { return String(w.taskId) === String(dashboardFilter.taskId); });
+        if (!exists) dashboardFilter.taskId = 'all';
+      }
+      renderTeacherDashboardView(el);
+    }, function (e) {
+      dashboardCache = null;
+      el.innerHTML = '<div class="text-center p-5 text-danger">読み込みに失敗しました。更新してください。</div>';
+      handleError(e);
+    });
+    return;
+  }
+
+  var worksheets = dashboardCache.worksheets || [];
+
+  // 授業ドロップダウン（選択は dashboardFilter を正とする＝自己リセットしない）
+  var taskOptions = '<option value="all"' + (dashboardFilter.taskId === 'all' ? ' selected' : '') + '>すべての授業</option>';
+  worksheets.forEach(function (w) {
+    var label = (w.unitName ? w.unitName + ' / ' : '') + (w.stepTitle || w.taskId);
+    var sel = String(dashboardFilter.taskId) === String(w.taskId) ? ' selected' : '';
+    taskOptions += '<option value="' + escapeHtml(w.taskId) + '"' + sel + '>' + escapeHtml(label) + '</option>';
+  });
+
+  function statusOpt(v, lbl) {
+    return '<option value="' + v + '"' + (dashboardFilter.status === v ? ' selected' : '') + '>' + lbl + '</option>';
+  }
+  function sortOpt(v, lbl) {
+    return '<option value="' + v + '"' + (dashboardFilter.sort === v ? ' selected' : '') + '>' + lbl + '</option>';
+  }
+
+  var batchDisabled = (dashboardFilter.taskId === 'all') ? ' disabled' : '';
+
+  var controls =
+    '<div class="d-flex flex-wrap gap-2 align-items-end mb-3 flex-shrink-0">'
+    + '  <div><label class="form-label small fw-bold mb-1">授業でしぼる</label>'
+    + '    <select class="form-select form-select-sm" style="min-width:200px" onchange="setDashTask(this.value)">' + taskOptions + '</select></div>'
+    + '  <div><label class="form-label small fw-bold mb-1">状態</label>'
+    + '    <select class="form-select form-select-sm" onchange="setDashStatus(this.value)">'
+    + statusOpt('all', 'すべて') + statusOpt('submitted', '未添削（提出ずみ）') + statusOpt('graded', '添削ずみ') + '</select></div>'
+    + '  <div><label class="form-label small fw-bold mb-1">並べ替え</label>'
+    + '    <select class="form-select form-select-sm" onchange="setDashSort(this.value)">'
+    + sortOpt('submittedAt', '提出日時') + sortOpt('name', '名前') + sortOpt('status', '状態') + '</select></div>'
+    + '  <div class="flex-grow-1" style="min-width:160px"><label class="form-label small fw-bold mb-1">名前でさがす</label>'
+    + '    <input type="text" class="form-control form-control-sm" placeholder="名前の一部..." value="' + escapeHtml(dashboardFilter.name) + '" oninput="setDashName(this.value)"></div>'
+    + '  <div class="d-flex gap-2">'
+    + '    <button class="btn btn-outline-success btn-sm rounded-pill px-3" onclick="openDashboardBatch()"' + batchDisabled + ' title="' + (batchDisabled ? '授業を1つ選ぶと使えます' : 'AIが全員分のコメント案を作ります') + '"><i class="bi bi-robot me-1" aria-hidden="true"></i>AI一括コメント</button>'
+    + '    <button class="btn btn-outline-secondary btn-sm rounded-pill px-3" onclick="refreshDashboard()"><i class="bi bi-arrow-clockwise me-1" aria-hidden="true"></i>更新</button>'
+    + '  </div>'
+    + '</div>';
+
+  // AI 一括レビュー中はカードグリッドの代わりにレビュー画面を出す
+  if (dashboardBatch !== null) {
+    el.innerHTML = controls + '<div id="dash-batch" class="flex-grow-1 overflow-auto"></div>';
+    renderDashboardBatchPanel();
+    return;
+  }
+
+  el.innerHTML = controls
+    + '<div id="dash-stats" class="mb-2 flex-shrink-0"></div>'
+    + '<div id="dash-grid" class="flex-grow-1" tabindex="-1"></div>'
+    + '<div id="dash-detail" class="d-none"></div>';
+
+  // グリッドへキーボード操作を一度だけ束ねる（カードが対象。入力中は横取りしない）
+  var gridEl = document.getElementById('dash-grid');
+  if (gridEl) {
+    gridEl.addEventListener('keydown', onDashGridKeydown);
+    gridEl.addEventListener('click', function (ev) {
+      var card = ev.target && ev.target.closest ? ev.target.closest('[data-dash-card]') : null;
+      if (!card) return;
+      openDashboardDetail(card.getAttribute('data-dash-card'));
+    });
+  }
+  renderDashboardGrid();
+}
+
+// フィルタ操作ハンドラ ---------------------------------------------------------
+function setDashTask(v) { dashboardFilter.taskId = v; dashboardBatch = null; renderTeacherDashboardView(document.getElementById('t-area')); }
+function setDashStatus(v) { dashboardFilter.status = v; renderDashboardGrid(); }
+function setDashSort(v) { dashboardFilter.sort = v; renderDashboardGrid(); }
+function setDashName(v) { dashboardFilter.name = v; renderDashboardGrid(); }
+function refreshDashboard() { dashboardCache = null; dashboardBatch = null; renderTeacherDashboardView(document.getElementById('t-area')); }
+
+// カードグリッド＋統計バッジだけを再描画（コントロールは作り直さない＝入力フォーカスを保つ）
+function renderDashboardGrid() {
+  var statsEl = document.getElementById('dash-stats');
+  var gridEl = document.getElementById('dash-grid');
+  if (!gridEl) return;
+
+  var scope = dashboardFilteredByTaskName();
+  var graded = scope.filter(function (s) { return MiraiShared.normSubmission(s.status) === 'graded'; }).length;
+  var total = scope.length;
+  if (statsEl) {
+    statsEl.innerHTML =
+      '<span class="badge bg-secondary me-1">提出 ' + total + '</span>'
+      + '<span class="badge bg-primary me-1">添削ずみ ' + graded + '</span>'
+      + '<span class="badge bg-warning text-dark">未添削 ' + (total - graded) + '</span>';
+  }
+
+  var list = dashboardVisible();
+  if (list.length === 0) {
+    gridEl.innerHTML = '<div class="text-center p-5 text-muted">条件に合う提出物がありません</div>';
+    return;
+  }
+
+  var cards = list.map(function (s) {
+    var graded = MiraiShared.normSubmission(s.status) === 'graded';
+    var badge = graded
+      ? '<span class="badge bg-primary">添削ずみ</span>'
+      : '<span class="badge bg-success">提出ずみ</span>';
+    var hasComment = s.feedbackText && String(s.feedbackText).trim()
+      ? '<span class="badge bg-info text-dark"><i class="bi bi-chat-left-text me-1" aria-hidden="true"></i>コメント有</span>'
+      : '<span class="badge bg-light text-muted">コメント無</span>';
+    var when = (s.submittedAt && s.submittedAt > 0) ? new Date(s.submittedAt).toLocaleString() : '';
+    var thumb = s.canvasImage
+      ? '<img src="' + escUrl(s.canvasImage) + '" alt="" class="w-100 rounded" style="height:120px;object-fit:cover;background:#f8f9fa" loading="lazy">'
+      : '<div class="w-100 rounded d-flex align-items-center justify-content-center text-muted" style="height:120px;background:#f8f9fa"><i class="bi bi-image fs-2" aria-hidden="true"></i></div>';
+    return '<button type="button" class="card border-0 shadow-sm rounded-4 p-2 text-start" '
+      + 'data-dash-card="' + escapeHtml(String(s.rowIndex)) + '" '
+      + 'style="width:100%;cursor:pointer" '
+      + 'title="' + escapeHtml(s.studentName || '名無し') + ' さんの提出を開く">'
+      + thumb
+      + '<div class="mt-2 fw-bold text-truncate">' + escapeHtml(s.studentName || '名無し') + '</div>'
+      + '<div class="d-flex flex-wrap gap-1 mt-1">' + badge + hasComment + '</div>'
+      + (when ? '<div class="small text-muted mt-1">' + escapeHtml(when) + '</div>' : '')
+      + '</button>';
+  }).join('');
+
+  gridEl.innerHTML = '<div class="dash-card-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0.75rem">' + cards + '</div>';
+}
+
+// グリッド内キーボード操作：矢印で移動、Enter で開く。入力欄では無効。
+function dashGridColumns(cards) {
+  if (!cards.length) return 1;
+  var top0 = cards[0].offsetTop, cols = 0;
+  for (var i = 0; i < cards.length; i++) {
+    if (cards[i].offsetTop === top0) cols++; else break;
+  }
+  return Math.max(1, cols);
+}
+
+function onDashGridKeydown(e) {
+  if (isDashTypingTarget(e.target)) return; // 入力中は横取りしない
+  var cards = Array.prototype.slice.call(document.querySelectorAll('#dash-grid [data-dash-card]'));
+  if (!cards.length) return;
+  var idx = cards.indexOf(document.activeElement);
+  if (e.key === 'Enter') {
+    if (idx >= 0) { e.preventDefault(); cards[idx].click(); }
+    return;
+  }
+  var cols = dashGridColumns(cards);
+  var next = -1;
+  if (e.key === 'ArrowRight') next = (idx < 0 ? 0 : idx + 1);
+  else if (e.key === 'ArrowLeft') next = (idx < 0 ? 0 : idx - 1);
+  else if (e.key === 'ArrowDown') next = (idx < 0 ? 0 : idx + cols);
+  else if (e.key === 'ArrowUp') next = (idx < 0 ? 0 : idx - cols);
+  else return;
+  e.preventDefault();
+  if (next < 0) next = 0;
+  if (next >= cards.length) next = cards.length - 1;
+  cards[next].focus();
+}
+
+// 詳細パネル（1件の添削操作）--------------------------------------------------
+function openDashboardDetail(rowIndex) {
+  var s = findDashSub(rowIndex);
+  var panel = document.getElementById('dash-detail');
+  if (!s || !panel) return;
+
+  var graded = MiraiShared.normSubmission(s.status) === 'graded';
+  var badge = graded ? '<span class="badge bg-primary">添削ずみ</span>' : '<span class="badge bg-success">提出ずみ</span>';
+  var thumb = s.canvasImage
+    ? '<img src="' + escUrl(s.canvasImage) + '" alt="" class="w-100 rounded mb-3" style="max-height:280px;object-fit:contain;background:#f8f9fa">'
+    : '';
+  var ri = escapeHtml(String(s.rowIndex));
+
+  panel.className = 'card border-0 shadow rounded-4 p-3 mt-3';
+  panel.setAttribute('tabindex', '-1');
+  panel.innerHTML =
+    '<div class="d-flex justify-content-between align-items-center mb-2">'
+    + '  <h6 class="fw-bold m-0">' + escapeHtml(s.studentName || '名無し') + ' さん ' + badge + '</h6>'
+    + '  <button type="button" class="btn-close" aria-label="閉じる" onclick="closeDashboardDetail()"></button>'
+    + '</div>'
+    + thumb
+    + '<label class="form-label small fw-bold mb-1">クイックコメント（文字だけ返す）</label>'
+    + '<textarea id="dash-detail-comment" class="form-control mb-2" rows="3" placeholder="コメントを入力...">' + escapeHtml(s.feedbackText || '') + '</textarea>'
+    + '<div class="d-flex flex-wrap gap-2">'
+    + '  <button type="button" class="btn btn-primary btn-sm rounded-pill px-3" onclick="saveDashboardComment(\'' + escJs(String(s.rowIndex)) + '\')"><i class="bi bi-save me-1" aria-hidden="true"></i>コメントを保存</button>'
+    + '  <button type="button" class="btn btn-danger btn-sm rounded-pill px-3" onclick="openDashboardGrading(\'' + escJs(String(s.rowIndex)) + '\')"><i class="bi bi-pencil-fill me-1" aria-hidden="true"></i>赤ペンで添削</button>'
+    + '  <button type="button" class="btn btn-outline-secondary btn-sm rounded-pill px-3" onclick="closeDashboardDetail()">閉じる</button>'
+    + '</div>'
+    + '<div class="form-text small mt-1">赤ペン添削で返却したあとは「更新」を押すと状態が反映されます。</div>';
+  panel.classList.remove('d-none');
+  // Esc で閉じる（入力中は横取りしない）
+  panel.onkeydown = function (e) {
+    if (isDashTypingTarget(e.target)) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeDashboardDetail(); }
+  };
+  panel.focus();
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function closeDashboardDetail() {
+  var panel = document.getElementById('dash-detail');
+  if (!panel) return;
+  panel.classList.add('d-none');
+  panel.innerHTML = '';
+  panel.onkeydown = null;
+  var gridEl = document.getElementById('dash-grid');
+  if (gridEl) gridEl.focus();
+}
+
+// クイックコメント（文字だけ）を保存。saveFeedback は data オブジェクトを受ける。
+function saveDashboardComment(rowIndex) {
+  var ta = document.getElementById('dash-detail-comment');
+  if (!ta) return;
+  var txt = ta.value || '';
+  showLoading();
+  runTeacher('saveFeedback', [{ rowIndex: parseInt(rowIndex, 10), feedbackText: txt }], function () {
+    hideLoading();
+    showToast('success', 'コメントを保存しました');
+    var s = findDashSub(rowIndex);
+    if (s) { s.status = 'graded'; s.feedbackText = txt; }
+    closeDashboardDetail();
+    renderDashboardGrid();
+  }, function (e) {
+    hideLoading();
+    handleError(e);
+  });
+}
+
+// 赤ペン添削（フルキャンバス）を開く。返却後の状態反映は「更新」で行う。
+function openDashboardGrading(rowIndex) {
+  var s = findDashSub(rowIndex);
+  if (!s) return;
+  closeDashboardDetail();
+  if (typeof Worksheet !== 'undefined' && Worksheet.openGrading) {
+    Worksheet.openGrading(s);
+  } else {
+    handleError({ message: '添削画面を開けませんでした' });
+  }
+}
+
+// AI 一括コメント ------------------------------------------------------------
+function openDashboardBatch() {
+  var taskId = dashboardFilter.taskId;
+  if (taskId === 'all') { showToast('info', '授業を1つ選んでください'); return; }
+  showLoading();
+  runTeacher('generateBatchComments', [taskId], function (res) {
+    hideLoading();
+    dashboardBatch = (res && res.comments) || [];
+    dashboardBatchTitle = (res && res.taskTitle) || '';
+    if (dashboardBatch.length === 0) {
+      dashboardBatch = null;
+      Swal.fire('対象なし', 'この授業に提出物がありません。', 'info');
+      return;
+    }
+    renderTeacherDashboardView(document.getElementById('t-area'));
+  }, function (e) {
+    hideLoading();
+    handleError(e);
+  });
+}
+
+function cancelDashboardBatch() {
+  dashboardBatch = null;
+  renderTeacherDashboardView(document.getElementById('t-area'));
+}
+
+function renderDashboardBatchPanel() {
+  var host = document.getElementById('dash-batch');
+  if (!host) return;
+  var rows = (dashboardBatch || []).map(function (c) {
+    var graded = MiraiShared.normSubmission(c.status) === 'graded';
+    var badge = graded ? '<span class="badge bg-primary ms-2">添削ずみ</span>' : '<span class="badge bg-success ms-2">提出ずみ</span>';
+    return '<div class="card border-0 shadow-sm rounded-3 p-3 mb-2">'
+      + '<div class="fw-bold">' + escapeHtml(c.studentName || '名無し') + badge + '</div>'
+      + '<div class="small text-muted mb-2" style="white-space:pre-wrap">児童の記述: ' + (c.textContent ? escapeHtml(c.textContent) : '（未記入）') + '</div>'
+      + '<textarea class="form-control" rows="3" data-batch-row="' + escapeHtml(String(c.rowIndex)) + '">' + escapeHtml(c.aiComment || '') + '</textarea>'
+      + '</div>';
+  }).join('');
+
+  host.innerHTML =
+    '<div class="d-flex justify-content-between align-items-center mb-3">'
+    + '  <h6 class="fw-bold m-0"><i class="bi bi-robot me-1" aria-hidden="true"></i>AIコメント案：' + escapeHtml(dashboardBatchTitle || '') + '<span class="text-muted small ms-2">（編集してから返却してください）</span></h6>'
+    + '  <div class="d-flex gap-2">'
+    + '    <button class="btn btn-success btn-sm rounded-pill px-3" onclick="submitDashboardBatch()"><i class="bi bi-send-fill me-1" aria-hidden="true"></i>一括返却</button>'
+    + '    <button class="btn btn-outline-secondary btn-sm rounded-pill px-3" onclick="cancelDashboardBatch()">キャンセル</button>'
+    + '  </div>'
+    + '</div>'
+    + rows;
+}
+
+function submitDashboardBatch() {
+  var areas = document.querySelectorAll('#dash-batch [data-batch-row]');
+  var list = [];
+  areas.forEach(function (a) {
+    var ri = parseInt(a.getAttribute('data-batch-row'), 10);
+    var txt = a.value || '';
+    if (ri && txt.trim()) list.push({ rowIndex: ri, feedbackText: txt });
+  });
+  if (list.length === 0) { showToast('info', '返すコメントがありません'); return; }
+  showLoading();
+  runTeacher('batchSaveFeedback', [list], function () {
+    hideLoading();
+    showToast('success', list.length + '件を返却しました');
+    list.forEach(function (item) {
+      var s = findDashSub(item.rowIndex);
+      if (s) { s.status = 'graded'; s.feedbackText = item.feedbackText; }
+    });
+    dashboardBatch = null;
+    renderTeacherDashboardView(document.getElementById('t-area'));
+  }, function (e) {
+    hideLoading();
+    handleError(e);
+  });
 }
 
 // ==========================================
@@ -812,8 +1360,8 @@ function renderTeacherDesignView(container) {
           <button class="btn btn-outline-secondary" onclick="changeUnitTotalHours(1)"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
           <button class="btn btn-outline-secondary" onclick="changeUnitTotalHours(-1)"><i class="bi bi-dash-lg" aria-hidden="true"></i></button>
         </div>
-        <button class="btn btn-primary btn-sm rounded-pill px-3 shadow-sm" onclick="syncUnitToPassport()" title="みらいパスポートでワークシートを作成">
-          <i class="bi bi-rocket-takeoff-fill me-2"></i>WS作成連携
+        <button class="btn btn-primary btn-sm rounded-pill px-3 shadow-sm" onclick="createWorksheetsForCurrentUnit()" title="この単元のワークシートを用意する">
+          <i class="bi bi-rocket-takeoff-fill me-2"></i>WS作成
         </button>
       </div>
     </div>
@@ -948,6 +1496,16 @@ function openTeacherTaskEditModal(taskId) {
           <label class="form-check-label fw-bold" for="ed-teacher">先生タスク（固定表示）にする</label>
           <div class="form-text x-small ps-1">ONにすると、指定した時数に自動的に固定表示されます。</div>
         </div>
+
+        ${isNew ? '' : `
+        <div class="card p-2 bg-light border-0 mb-1">
+          <div class="small fw-bold text-muted mb-2"><i class="bi bi-journal-richtext"></i> みらいパスポート ワークシート</div>
+          <div class="d-grid gap-2">
+            <button type="button" class="btn btn-outline-primary btn-sm" onclick="openWorksheetEditorForTask('${escJs(task.taskId)}')"><i class="bi bi-pencil-square me-1"></i>ワークシート作成・編集</button>
+            <button type="button" class="btn btn-outline-info btn-sm" onclick="openWorksheetSubmissions('${escJs(task.taskId)}')"><i class="bi bi-people-fill me-1"></i>提出物を見る・添削する</button>
+          </div>
+        </div>
+        `}
       </div>`,
     showCancelButton: true,
     confirmButtonText: '保存',
@@ -1299,37 +1857,11 @@ function submitImportJson() {
     handleError);
 }
 
-// [連携] パスポートへ単元計画を送信
-function syncUnitToPassport() {
-  if (!appState.passportDbId || !appState.passportUrl) {
-    Swal.fire({ icon: 'warning', title: '連携未設定', text: '「みらいパスポート」の設定が完了していません。右上の設定ボタンから登録してください。' });
-    return;
-  }
-
-  Swal.fire({
-    title: 'ワークシート作成連携',
-    text: `現在の単元「${appState.unit.title}」の計画データをパスポートへ送信し、ワークシートを一括作成しますか？`,
-    icon: 'question',
-    showCancelButton: true,
-    confirmButtonColor: '#1a73e8',
-    confirmButtonText: '送信して作成開始'
-  }).then((result) => {
-    if (result.isConfirmed) {
-      showLoading();
-      google.script.run
-        .withSuccessHandler(res => {
-          hideLoading();
-          if (res.success) {
-            Swal.fire({ title: '連携成功', text: 'みらいパスポートを開きます。', icon: 'success', timer: 2000, showConfirmButton: false });
-            if (res.passportUrl) window.open(res.passportUrl, '_blank');
-          } else {
-            handleError({ message: res.message || '連携に失敗しました' });
-          }
-        })
-        .withFailureHandler(handleError)
-        .sendUnitPlanToPassport_DirectDB(appState.unit.id);
-    }
-  });
+// [統合] この単元の児童用タスクにワークシート（Worksheets シート）の器を用意する
+function createWorksheetsForCurrentUnit() {
+  runTeacher('createWorksheetsForUnit', [appState.unit.id],
+    res => Swal.fire('作成しました', (res && res.created != null ? res.created : '') + '件のワークシートを用意しました。', 'success'),
+    handleError);
 }
 
 // ==========================================

@@ -172,6 +172,83 @@ footer {
   padding-right: var(--safe-r);
 }
 
+/* =========================================
+   児童用ボトムタブナビ (4-tab bottom nav)
+   ─ 児童モードでログイン中だけ表示する固定タブバー。
+     指で押しやすい大きさ（≥44px）にし、ノッチ／ホームバーの
+     セーフエリアを避ける。フッター（著作権・教員ログイン）は
+     ナビの上に少しだけ乗せて、教員ログインの導線を残す。
+   ========================================= */
+:root { --student-nav-h: 60px; }
+
+.student-bottom-nav {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 1045;                 /* フッター(1040)より上・タイマー(1050)より下 */
+  display: flex;
+  align-items: stretch;
+  background-color: var(--bg-card);
+  border-top: 1px solid var(--border-color);
+  box-shadow: 0 -2px 10px rgba(0,0,0,.06);
+  /* セーフエリア（ホームバー・左右ノッチ）を避ける */
+  padding-bottom: var(--safe-b);
+  padding-left: var(--safe-l);
+  padding-right: var(--safe-r);
+}
+.student-bottom-nav .snav-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;              /* 指で押せる最小の当たり判定 */
+  height: var(--student-nav-h);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 2px;
+  transition: color .15s ease, background-color .15s ease;
+}
+.student-bottom-nav .snav-btn i { font-size: 1.35rem; line-height: 1; }
+.student-bottom-nav .snav-btn .snav-label {
+  font-size: clamp(10px, 2.4vw, 12px);
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.student-bottom-nav .snav-btn:hover { background-color: var(--bg-body); }
+.student-bottom-nav .snav-btn:focus-visible {
+  outline: 3px solid var(--bs-primary, #1a73e8);
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+.student-bottom-nav .snav-btn[aria-current="page"] {
+  color: var(--bs-primary, #1a73e8);
+}
+.student-bottom-nav .snav-btn[aria-current="page"] i { transform: translateY(-1px); }
+
+/* ナビが出ている間はコンテンツ・フッター・浮遊ウィジェットの位置を調整 */
+body.has-student-nav main.container {
+  /* フッター + タブバー + セーフエリアの分だけ下に余白を足す（内容が隠れない） */
+  padding-bottom: calc(var(--student-nav-h) + 96px + var(--safe-b));
+}
+body.has-student-nav footer {
+  /* フッターはタブバーの上に乗せる（教員ログインの導線を残す） */
+  bottom: calc(var(--student-nav-h) + var(--safe-b));
+  padding-bottom: .15rem;
+}
+body.has-student-nav #my-timer-widget,
+body.has-student-nav #timer-launcher {
+  /* タイマーの浮遊ボタンがタブバーと重ならないよう持ち上げる */
+  bottom: calc(var(--student-nav-h) + var(--safe-b) + 20px) !important;
+}
+
 /* Bootstrapデフォルトの上書き */
 .bg-light { background-color: var(--bg-body) !important; }
 .bg-white { background-color: var(--bg-card) !important; }

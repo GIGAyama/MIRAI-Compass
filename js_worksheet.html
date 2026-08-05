@@ -1,0 +1,1473 @@
+<script>
+/**
+ * ============================================================
+ *  みらいコンパス — ワークシート統合モジュール (js_worksheet.html)
+ * ============================================================
+ *
+ * みらいパスポートの「ワークシート回答・作成・添削」を、みらいコンパスの
+ * 中へ 1 つのアプリ・1 つの Google ログインで取り込むための自己完結モジュール。
+ *
+ * ■ 設計方針
+ *   - グローバル名前空間は `Worksheet` ただ 1 つ。中身は IIFE に閉じ込める。
+ *   - コンパスの renderApp() と喧嘩しないよう、開いたときに自前の全画面
+ *     オーバーレイ（高 z-index）を document.body へ差し込み、閉じるときに
+ *     取り除く。Fabric キャンバスもそのとき破棄する。
+ *   - サーバー通信はコンパスの生の google.script.run を Promise で包む。
+ *     児童機能はサーバーが本人を判定するので studentId は送らない。
+ *     先生機能はトークンを付けない（サーバーが Session から判定）。
+ *   - MiraiShared（js_core.html）と fabric（Phase D でバンドル済み）は
+ *     再定義せず参照する。
+ *
+ * ■ 公開 API（コンパス側から呼ぶ）
+ *   Worksheet.openStudent(task)        児童：回答画面を開く
+ *   Worksheet.openTeacherEditor(task)  先生：作成・編集画面を開く
+ *   Worksheet.openGrading(submission)  先生：添削画面を開く
+ *   Worksheet.close()                  画面を閉じる
+ *
+ * ■ 見送り（この段では実装しない。壊れた参照は残さず「準備中」にする）
+ *   - 児童「みんなの広場 / ギャラリー」（peer view）
+ *   - mode=dashboard の一括管理画面
+ *   - 4 タブのボトムナビ再構成
+ * ============================================================
+ */
+var Worksheet = (function () {
+  'use strict';
+
+  /* ==========================================================
+   *  1. 内部ブリッジ — コンパスのグローバルへ橋渡しする
+   * ========================================================== */
+
+  // Fabric のキャンバス解像度に上限を付ける（GIGA 標準機のメモリ対策。
+  // 3 倍密度の端末で面積 9 倍を描くとタブごと落ちるため 2 で頭打ち）。
+  // 上限 2（引数の順は Math.min(2, dpr)。同等の上限だが、DPR 補正の正本は
+  // js_student.html 側に一本化しておく＝ここは重複させない）。
+  if (typeof fabric !== 'undefined') {
+    fabric.devicePixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  }
+
+  // サーバー通信ラッパー（google.script.run を Promise 化）。
+  // call / callTeacher とも同じ実装。トークンは付けない（サーバーが
+  // Session.getActiveUser() で本人・役割を判定する）。
+  var Server = {
+    call: function (funcName) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return new Promise(function (resolve, reject) {
+        var r = google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(function (error) {
+            UI.hideLoading();
+            if (typeof console !== 'undefined') console.error('WS Server Error [' + funcName + ']:', error);
+            reject(error);
+          });
+        r[funcName].apply(r, args);
+      });
+    },
+    callTeacher: function (funcName) {
+      return Server.call.apply(Server, arguments);
+    }
+  };
+
+  // UI ヘルパー。エスケープは MiraiShared を参照（再定義しない）。
+  // ローディング / トーストはコンパスのグローバルへ委譲する。
+  var UI = {
+    esc: MiraiShared.escHtml,
+    escUrl: MiraiShared.escUrl,
+    escJs: MiraiShared.escJs,
+    showLoading: function () { if (typeof showLoading === 'function') showLoading(); },
+    hideLoading: function () { if (typeof hideLoading === 'function') hideLoading(); },
+    toast: function (title, icon) {
+      if (typeof showToast === 'function') showToast(icon || 'success', title);
+    }
+  };
+
+  // 画面全体で共有する状態。studentId はクライアントで持たない。
+  var State = {
+    mode: 'student',      // 'student' | 'teacher' | 'grading'
+    currentTask: null,    // { id, title, description, category, rubricHtml, canvasData }
+    unitData: null,       // { unitInfo:{grade,subject,unitName} }
+    fabricCanvas: null,   // メインの手書きキャンバス
+    peerCanvas: null,     // （広場用・現状は未使用）
+    isDrawMode: false,
+    studentName: '',
+    gradingRow: null,     // 添削中の回答の行番号
+    gradingCanvas: null,  // 添削用（赤ペン）キャンバス
+    dashboardData: []     // （提出一覧のキャッシュ）
+  };
+
+  // オーバーレイ要素・後始末用のハンドル
+  var overlayEl = null;
+  var autoSaveTimer = null;
+  var pageHideHandler = null;
+  var visibilityHandler = null;
+
+  var ANSWER_KEY_PREFIX = 'mirai_ws_';           // localStorage の下書きキー接頭辞
+  var STUDENT_ANSWER_SELECTOR = '.ws-box, .ws-lines, .rich-editor, .ws-answer';
+
+
+  /* ==========================================================
+   *  2. オーバーレイ DOM の生成・破棄
+   * ========================================================== */
+
+  // ワークシート部品の CSS を 1 度だけ差し込む（コンパスの css.html には無い）。
+  function injectStyleOnce() {
+    if (document.getElementById('ws-module-style')) return;
+    var st = document.createElement('style');
+    st.id = 'ws-module-style';
+    st.textContent = [
+      '.ws-overlay{position:fixed;inset:0;z-index:20000;background:#e9ecef;display:flex;flex-direction:column;',
+      '  padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);}',
+      '.ws-topbar{display:flex;align-items:center;gap:.5rem;background:#fff;border-bottom:1px solid #dee2e6;',
+      '  padding:.5rem .75rem;flex:0 0 auto;}',
+      '.ws-topbar-title{font-weight:700;color:#1a73e8;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.ws-toolbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;background:#fff;border-bottom:1px solid #dee2e6;',
+      '  padding:.4rem .75rem;flex:0 0 auto;}',
+      '.ws-scroll{flex:1 1 auto;overflow:auto;position:relative;padding:1rem;display:flex;justify-content:center;align-items:flex-start;',
+      '  -webkit-overflow-scrolling:touch;}',
+      '.ws-sheet-wrap{position:relative;width:210mm;max-width:none;}',
+      '.ws-bottombar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;justify-content:flex-end;background:#fff;',
+      '  border-top:1px solid #dee2e6;padding:.5rem .75rem;flex:0 0 auto;padding-bottom:calc(.5rem + env(safe-area-inset-bottom));}',
+      '.ws-overlay .sheet{background:#fff;width:100%;min-height:297mm;padding:10mm;box-shadow:0 2px 12px rgba(0,0,0,.15);',
+      '  box-sizing:border-box;position:relative;z-index:1;}',
+      '.ws-overlay #worksheetContent{outline:none;font-size:12pt;line-height:1.6;color:#2c3e50;position:relative;z-index:2;min-height:100%;}',
+      '.ws-overlay #drawCanvas{position:absolute;top:0;left:0;z-index:10;}',
+      '.ws-overlay .canvas-container{position:absolute!important;top:0;left:0;z-index:10;}',
+      '#drawCanvas,.canvas-container,#gradingCanvas{touch-action:none;}',
+      '.ws-image-toolbar{position:absolute;z-index:25;background:#fff;border-radius:2rem;box-shadow:0 2px 8px rgba(0,0,0,.2);',
+      '  padding:.25rem .5rem;display:flex;gap:.35rem;align-items:center;}',
+      '/* AI 生成ワークシート部品 */',
+      '.ws-overlay .ws-sheet{background:transparent;width:100%;display:flex;flex-direction:column;font-feature-settings:"palt";}',
+      '.ws-overlay .ws-header-fixed{border-bottom:1px solid #333;padding-bottom:5px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-end;}',
+      '.ws-overlay .ws-header-left{display:flex;flex-direction:column;gap:2px;}',
+      '.ws-overlay .ws-unit-name{font-size:.8rem;color:#666;background:#f0f0f0;padding:1px 6px;border-radius:4px;display:inline-block;}',
+      '.ws-overlay .ws-title{font-size:1.5rem;font-weight:bold;margin:0;line-height:1.2;color:#2c3e50;border:none;}',
+      '.ws-overlay .ws-meta-table{border-collapse:collapse;font-size:.8rem;margin-bottom:2px;}',
+      '.ws-overlay .ws-meta-table td{border:1px solid #333;padding:4px 10px;text-align:center;}',
+      '.ws-overlay .ws-meta-label{background:#eee;font-weight:bold;width:40px;}',
+      '.ws-overlay .ws-meta-input{min-width:80px;height:1.4em;}',
+      '.ws-overlay .ws-content{flex:1;padding:5px 0;position:relative;}',
+      '.ws-overlay .ws-footer-fixed{border-top:1px solid #333;padding-top:5px;margin-top:auto;font-size:.8rem;}',
+      '.ws-overlay .ws-assessment-grid{display:grid;grid-template-columns:2fr 1fr;gap:10px;}',
+      '.ws-overlay .ws-reflection-box{border:1px solid #333;border-radius:4px;padding:5px;}',
+      '.ws-overlay .ws-reflection-title{font-weight:bold;font-size:.8rem;display:block;margin-bottom:2px;background:#eee;padding:1px 4px;}',
+      '.ws-overlay .eval-btn{display:inline-flex;align-items:center;justify-content:center;width:2.2em;height:2.2em;margin:2px;',
+      '  border:2px solid #ccc;border-radius:50%;background:#fff;font-size:1em;font-weight:bold;color:#888;cursor:pointer;',
+      '  transition:all .15s ease;padding:0;line-height:1;}',
+      '.ws-overlay .eval-btn:hover{border-color:#888;background:#f5f5f5;transform:scale(1.1);}',
+      '.ws-overlay .eval-btn.active{border-color:#1a73e8;background:#1a73e8;color:#fff;transform:scale(1.15);box-shadow:0 2px 6px rgba(26,115,232,.3);}',
+      '.ws-overlay td:has(.eval-btn.active) .eval-btn:not(.active){opacity:.4;}',
+      '.ws-overlay .ws-rubric-table{width:100%;border-collapse:collapse;font-size:.75rem;}',
+      '.ws-overlay .ws-rubric-table th,.ws-overlay .ws-rubric-table td{border:1px solid #999;padding:2px;text-align:center;}',
+      '.ws-overlay .ws-rubric-table th{background:#f0f0f0;}',
+      '.ws-overlay .grid-paper{background-image:linear-gradient(#b3d1ff 1px,transparent 1px),linear-gradient(90deg,#b3d1ff 1px,transparent 1px);background-size:40px 40px;border:1px solid #b3d1ff;padding:2px;}',
+      '.ws-overlay .graph-paper{background-size:20px 20px;background-image:linear-gradient(to right,#ddd 1px,transparent 1px),linear-gradient(to bottom,#ddd 1px,transparent 1px);border:1px solid #ccc;min-height:150px;}',
+      '.ws-overlay .math-grid{display:inline-grid;grid-template-columns:repeat(auto-fit,30px);gap:1px;font-family:monospace;font-size:1.5rem;text-align:center;margin:10px;background:#fff;border:1px solid #eee;padding:5px;}',
+      '.ws-overlay .math-cell{width:30px;height:40px;display:flex;align-items:center;justify-content:center;}',
+      '.ws-overlay .math-line{grid-column:1 / -1;height:2px;background:#333;margin:2px 0;}',
+      '.ws-overlay .mode-kokugo{font-family:"Zen Old Mincho","Noto Serif JP",serif;}',
+      '.ws-overlay .mode-kokugo .ws-content{writing-mode:vertical-rl;text-orientation:upright;height:100%;min-height:500px;display:flex;flex-direction:column;align-items:flex-start;overflow:hidden;}',
+      '.ws-overlay .resizable-image-container{outline:1px dashed transparent;transition:outline-color .2s ease;user-select:none;min-width:50px;min-height:50px;vertical-align:middle;}',
+      '.ws-overlay .resizable-image-container.is-resizable-active{outline:1px dashed #1a73e8;cursor:grab;}',
+      '.ws-overlay .resize-handle{position:absolute;width:10px;height:10px;background:#1a73e8;border:1px solid #fff;border-radius:50%;z-index:1;}',
+      '.ws-overlay .resize-nw{top:-5px;left:-5px;cursor:nwse-resize;}.ws-overlay .resize-ne{top:-5px;right:-5px;cursor:nesw-resize;}',
+      '.ws-overlay .resize-sw{bottom:-5px;left:-5px;cursor:nesw-resize;}.ws-overlay .resize-se{bottom:-5px;right:-5px;cursor:nwse-resize;}',
+      '.ws-overlay .resize-n{top:-5px;left:calc(50% - 5px);cursor:ns-resize;}.ws-overlay .resize-s{bottom:-5px;left:calc(50% - 5px);cursor:ns-resize;}',
+      '.ws-overlay .resize-w{left:-5px;top:calc(50% - 5px);cursor:ew-resize;}.ws-overlay .resize-e{right:-5px;top:calc(50% - 5px);cursor:ew-resize;}',
+      '.ws-overlay .ws-box,.ws-overlay .ws-lines,.ws-overlay .ws-instruction{resize:vertical;overflow:auto;position:relative;min-height:50px;}',
+      '.ws-submodal{position:fixed;inset:0;z-index:20100;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;padding:1rem;}',
+      '.ws-submodal-card{background:#fff;border-radius:.75rem;max-width:900px;width:100%;max-height:90vh;overflow:auto;padding:1rem;}',
+      '.ws-rubric-container{min-height:200px;border:1px solid #dee2e6;border-radius:.5rem;background:#f8f9fa;padding:1rem;}',
+      '@media print{.ws-overlay .ws-box,.ws-overlay .ws-lines{resize:none;overflow:visible;}}'
+    ].join('\n');
+    document.head.appendChild(st);
+  }
+
+  // オーバーレイの骨組みを組み立てて body へ差し込む。
+  // Passport のワークシート DOM 契約（必要な id 一式）を満たす。
+  function buildOverlay() {
+    injectStyleOnce();
+    var el = document.createElement('div');
+    el.className = 'ws-overlay';
+    el.id = 'ws-overlay';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-label', 'ワークシート');
+    el.innerHTML =
+      '<div class="ws-topbar">'
+      + '  <span class="ws-topbar-title" id="ws-topbar-title">ワークシート</span>'
+      + '  <button type="button" class="btn btn-sm btn-outline-secondary rounded-circle" id="ws-close-btn" aria-label="閉じる"><i class="bi bi-x-lg" aria-hidden="true"></i></button>'
+      + '</div>'
+      + '<div id="editorToolbar" class="ws-toolbar">'
+      + '  <button type="button" id="btnDrawMode" class="btn btn-sm btn-outline-dark rounded-pill"><i class="bi bi-pencil-fill" aria-hidden="true"></i> 手書き</button>'
+      + '  <span id="drawTools" class="d-none d-flex gap-2 align-items-center">'
+      + '    <input type="color" id="penColor" value="#ff0000" class="form-control form-control-color form-control-sm" title="ペンの色" aria-label="ペンの色">'
+      + '    <button type="button" id="ws-clear-btn" class="btn btn-sm btn-light" title="ぜんぶ消す"><i class="bi bi-eraser" aria-hidden="true"></i></button>'
+      + '  </span>'
+      + '  <button type="button" id="ws-img-btn" class="btn btn-sm btn-outline-dark rounded-pill"><i class="bi bi-image" aria-hidden="true"></i> 画像</button>'
+      + '  <input type="file" id="ws-img-input" class="d-none" accept="image/*">'
+      + '  <span id="ws-teacher-tools" class="d-none d-flex gap-2 align-items-center flex-wrap"></span>'
+      + '  <span id="ws-student-tools" class="d-none d-flex gap-2 align-items-center flex-wrap ms-auto">'
+      + '    <input type="text" id="studentNameInput" class="form-control form-control-sm" placeholder="名前" style="width:120px;" aria-label="名前">'
+      + '    <span class="form-check form-switch m-0" title="広場に公開">'
+      + '      <input class="form-check-input" type="checkbox" id="isPublicCheck" checked>'
+      + '      <label class="form-check-label small" for="isPublicCheck">公開</label>'
+      + '    </span>'
+      + '    <button type="button" id="btnFeedback" class="btn btn-sm btn-warning rounded-pill d-none"><i class="bi bi-envelope-exclamation-fill" aria-hidden="true"></i> 先生コメント</button>'
+      + '  </span>'
+      + '</div>'
+      + '<div id="ws-scroll" class="ws-scroll">'
+      + '  <div class="ws-sheet-wrap" id="ws-sheet-wrap">'
+      + '    <div id="paperArea" class="sheet"><div id="worksheetContent"></div></div>'
+      + '    <canvas id="drawCanvas" class="d-none"></canvas>'
+      + '    <div id="gradingContainer" class="d-none"></div>'
+      + '  </div>'
+      + '</div>'
+      + '<div id="imageToolbar" class="ws-image-toolbar d-none">'
+      + '  <button type="button" class="btn btn-sm btn-outline-secondary" data-align="left" title="左寄せ"><i class="bi bi-text-left" aria-hidden="true"></i></button>'
+      + '  <button type="button" class="btn btn-sm btn-outline-secondary" data-align="center" title="中央寄せ"><i class="bi bi-text-center" aria-hidden="true"></i></button>'
+      + '  <button type="button" class="btn btn-sm btn-outline-secondary" data-align="right" title="右寄せ"><i class="bi bi-text-right" aria-hidden="true"></i></button>'
+      + '  <button type="button" class="btn btn-sm btn-outline-danger" data-action="delete" title="画像を削除"><i class="bi bi-trash" aria-hidden="true"></i></button>'
+      + '</div>'
+      + '<div id="ws-bottombar" class="ws-bottombar"></div>'
+      // ルーブリック用サブモーダル（先生）
+      + '<div id="ws-rubric-modal" class="ws-submodal d-none">'
+      + '  <div class="ws-submodal-card">'
+      + '    <h5 class="fw-bold mb-2"><i class="bi bi-grid-3x3" aria-hidden="true"></i> 評価基準（ルーブリック）</h5>'
+      + '    <div id="rubricContainer" class="ws-rubric-container" contenteditable="true"></div>'
+      + '    <div class="d-flex gap-2 justify-content-end mt-3">'
+      + '      <button type="button" id="ws-rubric-ai" class="btn btn-warning rounded-pill me-auto"><i class="bi bi-stars" aria-hidden="true"></i> AI作成</button>'
+      + '      <button type="button" id="ws-rubric-save" class="btn btn-primary">保存</button>'
+      + '      <button type="button" id="ws-rubric-close" class="btn btn-outline-secondary">閉じる</button>'
+      + '    </div>'
+      + '  </div>'
+      + '</div>';
+    document.body.appendChild(el);
+    overlayEl = el;
+
+    // 共通の配線
+    byId('ws-close-btn').addEventListener('click', close);
+    byId('btnDrawMode').addEventListener('click', function () { toggleDrawMode(); });
+    byId('ws-clear-btn').addEventListener('click', clearCanvas);
+    byId('penColor').addEventListener('change', updateBrush);
+    byId('ws-img-btn').addEventListener('click', function () { byId('ws-img-input').click(); });
+    byId('ws-img-input').addEventListener('change', function () { insertImage(this); });
+
+    // 自己評価スタンプ（◎○△）— worksheetContent 内の委譲クリック
+    byId('worksheetContent').addEventListener('click', function (e) {
+      var btn = e.target.closest ? e.target.closest('.eval-btn') : null;
+      if (!btn) return;
+      var cell = btn.closest('td');
+      if (!cell) return;
+      cell.querySelectorAll('.eval-btn').forEach(function (b) {
+        b.classList.remove('active'); b.setAttribute('aria-pressed', 'false');
+      });
+      btn.classList.add('active'); btn.setAttribute('aria-pressed', 'true');
+    });
+
+    // ルーブリックモーダルの配線
+    byId('ws-rubric-ai').addEventListener('click', generateRubric);
+    byId('ws-rubric-save').addEventListener('click', saveRubric);
+    byId('ws-rubric-close').addEventListener('click', function () { byId('ws-rubric-modal').classList.add('d-none'); });
+
+    // 画像ツールバーの配線
+    overlayEl.querySelectorAll('#imageToolbar button[data-align]').forEach(function (b) {
+      b.addEventListener('click', function (e) { e.stopPropagation(); alignImage(b.dataset.align); });
+    });
+    var delBtn = overlayEl.querySelector('#imageToolbar button[data-action="delete"]');
+    if (delBtn) delBtn.addEventListener('click', function (e) { e.stopPropagation(); deleteSelectedImage(); });
+
+    return el;
+  }
+
+  function byId(id) { return document.getElementById(id); }
+
+  // 画面を閉じる：後始末（タイマー・イベント・キャンバス破棄・DOM 除去）
+  function close() {
+    if (autoSaveTimer) { clearInterval(autoSaveTimer); autoSaveTimer = null; }
+    if (pageHideHandler) { window.removeEventListener('pagehide', pageHideHandler); pageHideHandler = null; }
+    if (visibilityHandler) { document.removeEventListener('visibilitychange', visibilityHandler); visibilityHandler = null; }
+    disposeCanvas(State, 'fabricCanvas');
+    disposeCanvas(State, 'peerCanvas');
+    disposeCanvas(State, 'gradingCanvas');
+    if (overlayEl && overlayEl.parentNode) overlayEl.parentNode.removeChild(overlayEl);
+    overlayEl = null;
+    State.currentTask = null;
+    State.gradingRow = null;
+    State.isDrawMode = false;
+  }
+
+  function disposeCanvas(obj, key) {
+    if (obj[key]) {
+      try { obj[key].dispose(); } catch (e) { /* 破棄時のエラーは無視 */ }
+      obj[key] = null;
+    }
+  }
+
+
+  /* ==========================================================
+   *  3. ワークシート本文（描画・入力・回答収集）
+   * ========================================================== */
+
+  // AI が挿入した <script> を実行する（innerHTML 経由では自動実行されないため）。
+  function activateWorksheetScripts(container) {
+    var scripts = container.querySelectorAll('script');
+    scripts.forEach(function (oldScript) {
+      var newScript = document.createElement('script');
+      newScript.text = oldScript.text;
+      oldScript.parentNode.replaceChild(newScript, oldScript);
+    });
+  }
+
+  // 児童モード：入力用クラスを持つ要素だけ contenteditable にする。
+  function enableStudentInputs() {
+    var ws = byId('worksheetContent');
+    if (!ws) return;
+    var inputs = ws.querySelectorAll('.ws-box, .ws-lines, .rich-editor, .ws-answer, [contenteditable="true"]');
+    for (var i = 0; i < inputs.length; i++) inputs[i].contentEditable = 'true';
+  }
+
+  // 回答欄 HTML を文書順で収集して JSON 文字列に。
+  function collectStudentAnswers() {
+    var ws = byId('worksheetContent');
+    if (!ws) return '';
+    var nodes = ws.querySelectorAll(STUDENT_ANSWER_SELECTOR);
+    var arr = [];
+    for (var i = 0; i < nodes.length; i++) arr.push(nodes[i].innerHTML);
+    return JSON.stringify(arr);
+  }
+
+  // 保存済み回答欄 HTML を書き戻す。
+  function restoreStudentAnswers(json) {
+    if (!json) return;
+    var arr;
+    try { arr = (typeof json === 'string') ? JSON.parse(json) : json; } catch (e) { return; }
+    if (!Array.isArray(arr)) return;
+    var ws = byId('worksheetContent');
+    if (!ws) return;
+    var nodes = ws.querySelectorAll(STUDENT_ANSWER_SELECTOR);
+    for (var i = 0; i < nodes.length && i < arr.length; i++) {
+      if (arr[i] !== null && arr[i] !== undefined) nodes[i].innerHTML = arr[i];
+    }
+  }
+
+  // AI 出力のクリーニング（コードブロック・body タグ・外部画像の除去）。
+  function cleanAIOutput(text) {
+    if (!text) return '';
+    return text
+      .replace(/```html/gi, '')
+      .replace(/```/g, '')
+      .replace(/^[\s\S]*?<body[^>]*>/i, '')
+      .replace(/<\/body>[\s\S]*$/i, '')
+      .replace(/<img\s+[^>]*src\s*=\s*["']https?:\/\/[^"']+["'][^>]*\/?>/gi, '<!-- 外部画像は非対応のため除去 -->')
+      .trim();
+  }
+
+
+  /* ==========================================================
+   *  4. Fabric キャンバス層（手書き・画像挿入）
+   * ========================================================== */
+
+  // 手書きキャンバスを（まだ無ければ）用意する。
+  // 手書きが OFF で開いても、先生の下地や前回の手書きが見えるよう、
+  // モードに関係なく作る。下地の読み込みは生成時の1回だけにして、
+  // 手書きを ON/OFF し直しても児童の線が消えないようにする。
+  function ensureCanvas() {
+    if (State.fabricCanvas) return;
+    var cv = byId('drawCanvas');
+    var pp = byId('paperArea');
+    if (!cv) return;
+    cv.classList.remove('d-none');
+    cv.style.position = 'absolute';
+    cv.style.left = '0';
+    cv.style.top = '0';
+    if (pp) { cv.width = pp.offsetWidth; cv.height = pp.offsetHeight; }
+    try { State.fabricCanvas = new fabric.Canvas('drawCanvas', { isDrawingMode: State.isDrawMode }); } catch (e) { /* init error */ }
+    if (State.currentTask && State.currentTask.canvasData && State.fabricCanvas) {
+      try { State.fabricCanvas.loadFromJSON(State.currentTask.canvasData); } catch (e) { /* 無視 */ }
+    }
+  }
+
+  function toggleDrawMode(forceState) {
+    var newState = (forceState !== undefined) ? forceState : !State.isDrawMode;
+    State.isDrawMode = newState;
+
+    var btn = byId('btnDrawMode');
+    var tools = byId('drawTools');
+
+    if (btn) {
+      btn.classList.replace(newState ? 'btn-outline-dark' : 'btn-dark', newState ? 'btn-dark' : 'btn-outline-dark');
+    }
+    if (tools) { if (newState) tools.classList.remove('d-none'); else tools.classList.add('d-none'); }
+
+    // キャンバスは手書き OFF でも用意する（下地・前回手書きの表示、自動保存のため）。
+    ensureCanvas();
+
+    // .canvas-container は fabric が canvas を包んで作る。
+    // ON なら手書き層が pointer を受け、OFF なら回答欄に pointer を通す。
+    var cnt = overlayEl ? overlayEl.querySelector('.canvas-container') : null;
+    if (newState) {
+      if (State.fabricCanvas) {
+        State.fabricCanvas.isDrawingMode = true;
+        if (State.fabricCanvas.freeDrawingBrush) {
+          var penColorEl = byId('penColor');
+          State.fabricCanvas.freeDrawingBrush.width = 3;
+          State.fabricCanvas.freeDrawingBrush.color = penColorEl ? penColorEl.value : '#ff0000';
+        }
+      }
+      if (cnt) cnt.style.pointerEvents = 'auto';
+      byId('worksheetContent').contentEditable = false;
+    } else {
+      if (State.fabricCanvas) State.fabricCanvas.isDrawingMode = false;
+      if (cnt) cnt.style.pointerEvents = 'none';
+      byId('worksheetContent').contentEditable = (State.mode === 'teacher');
+    }
+  }
+
+  function updateBrush() {
+    if (State.fabricCanvas) State.fabricCanvas.freeDrawingBrush.color = byId('penColor').value;
+  }
+
+  // 全消去は事故防止のため確認を挟む。
+  function clearCanvas() {
+    if (!State.fabricCanvas) return;
+    Swal.fire({
+      title: 'ぜんぶ消しますか？',
+      text: '書いた手書きがすべて消えます。この操作は元に戻せません。',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#d33',
+      cancelButtonColor: '#3085d6',
+      confirmButtonText: '消す',
+      cancelButtonText: 'やめる'
+    }).then(function (result) {
+      if (result.isConfirmed && State.fabricCanvas) State.fabricCanvas.clear();
+    });
+  }
+
+  // 画像挿入：手書き中はキャンバスへ、通常は Drive へアップロードして img 挿入。
+  function insertImage(input) {
+    if (input.files && input.files[0]) {
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        var img = new Image();
+        img.onload = function () {
+          var c = document.createElement('canvas');
+          var ctx = c.getContext('2d');
+          var MAX = 800;
+          var w = img.width, h = img.height;
+          if (w > h) { if (w > MAX) { h *= MAX / w; w = MAX; } }
+          else { if (h > MAX) { w *= MAX / h; h = MAX; } }
+          c.width = w; c.height = h;
+          ctx.drawImage(img, 0, 0, w, h);
+          var dataUrl = c.toDataURL('image/jpeg', 0.7);
+
+          if (State.isDrawMode && State.fabricCanvas) {
+            fabric.Image.fromURL(dataUrl, function (obj) {
+              obj.scaleToWidth(300);
+              State.fabricCanvas.add(obj);
+              State.fabricCanvas.centerObject(obj);
+            });
+          } else {
+            UI.showLoading();
+            Server.call('uploadImageToDrive', dataUrl)
+              .then(function (fileId) {
+                if (fileId) {
+                  var driveUrl = 'https://lh3.googleusercontent.com/d/' + fileId;
+                  insertAtCursor(
+                    '<div class="resizable-image-container" style="display:inline-block; position:relative;">' +
+                    '<img src="' + UI.escUrl(driveUrl) + '" style="max-width:100%; height:auto; display:block; margin:10px auto;">' +
+                    '</div>'
+                  );
+                } else {
+                  throw new Error('ファイルIDがサーバーから返されませんでした。');
+                }
+              })
+              .catch(function (error) {
+                if (typeof console !== 'undefined') console.error('画像のアップロードに失敗しました:', error);
+                Swal.fire('エラー', '画像のアップロードに失敗しました。', 'error');
+              })
+              .finally(function () { UI.hideLoading(); });
+          }
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(input.files[0]);
+    }
+    input.value = '';
+  }
+
+  function insertAtCursor(html) {
+    var el = byId('worksheetContent');
+    el.focus();
+    var sel = window.getSelection();
+    if (sel.getRangeAt && sel.rangeCount) {
+      var range = sel.getRangeAt(0);
+      if (el.contains(range.commonAncestorContainer)) {
+        range.deleteContents();
+        var div = document.createElement('div');
+        div.innerHTML = html;
+        var frag = document.createDocumentFragment();
+        var node;
+        while ((node = div.firstChild)) frag.appendChild(node);
+        range.insertNode(frag);
+        return;
+      }
+    }
+    el.insertAdjacentHTML('beforeend', html);
+  }
+
+  function alignImage(alignment) {
+    if (!Editor.selectedImageContainer) return;
+    var container = Editor.selectedImageContainer;
+    ['float', 'margin-left', 'margin-right', 'display', 'text-align'].forEach(function (p) { container.style.removeProperty(p); });
+    if (alignment === 'left') {
+      container.style.float = 'left'; container.style.marginRight = '10px'; container.style.marginBottom = '10px';
+    } else if (alignment === 'center') {
+      container.style.display = 'block'; container.style.marginLeft = 'auto'; container.style.marginRight = 'auto'; container.style.marginBottom = '10px';
+    } else if (alignment === 'right') {
+      container.style.float = 'right'; container.style.marginLeft = '10px'; container.style.marginBottom = '10px';
+    }
+    saveCurrentWorksheet();
+  }
+
+  function deleteSelectedImage() {
+    if (!Editor.selectedImageContainer) return;
+    Swal.fire({
+      title: '画像を削除しますか？', text: 'この操作は元に戻せません', icon: 'warning',
+      showCancelButton: true, confirmButtonColor: '#d33', cancelButtonColor: '#3085d6',
+      confirmButtonText: '削除', cancelButtonText: 'キャンセル'
+    }).then(function (result) {
+      if (result.isConfirmed) {
+        Editor.selectedImageContainer.remove();
+        Editor.hideImageToolbar();
+        saveCurrentWorksheet();
+        UI.toast('画像を削除しました', 'success');
+      }
+    });
+  }
+
+
+  /* ==========================================================
+   *  5. Editor — リッチエディタ（先生モード）
+   * ========================================================== */
+  var Editor = {
+    _inited: false,
+    currentTarget: null,
+    currentResizable: null,
+    currentHandle: null,
+    startMouseX: 0, startMouseY: 0,
+    startWidth: 0, startHeight: 0, startAspectRatio: 0,
+    selectedImageContainer: null,
+
+    // document レベルのリスナーと ctxMenu は 1 度だけ。
+    initOnce: function () {
+      if (Editor._inited) return;
+      Editor._inited = true;
+
+      var menu = document.createElement('div');
+      menu.id = 'ctxMenu';
+      menu.className = 'dropdown-menu shadow';
+      menu.style.position = 'fixed';
+      menu.style.display = 'none';
+      menu.style.zIndex = '21000';
+      document.body.appendChild(menu);
+      Editor._menu = menu;
+
+      document.addEventListener('contextmenu', function (e) {
+        var ws = byId('worksheetContent');
+        if (!ws || !ws.contains(e.target)) return;
+        if (ws.contentEditable !== 'true') return;
+        e.preventDefault();
+        Editor.showContextMenu(e, menu);
+      });
+      document.addEventListener('click', function () { menu.style.display = 'none'; });
+      document.addEventListener('mousemove', Editor.doResize);
+      document.addEventListener('mouseup', Editor.stopResizing);
+      document.addEventListener('click', function (e) {
+        var imageToolbar = byId('imageToolbar');
+        var ws = byId('worksheetContent');
+        if (Editor.selectedImageContainer && imageToolbar && ws &&
+            !imageToolbar.contains(e.target) && !ws.contains(e.target)) {
+          Editor.hideImageToolbar();
+        }
+      });
+    },
+
+    // worksheetContent は毎回作り直されるので、開くたびに接続する。
+    attachContent: function () {
+      var ws = byId('worksheetContent');
+      if (ws) ws.addEventListener('mousedown', Editor.handleContentMouseDown);
+      Editor.enableResizing();
+    },
+
+    handleContentMouseDown: function (e) {
+      var ws = byId('worksheetContent');
+      if (State.mode !== 'teacher' || !ws || ws.contentEditable !== 'true') {
+        if (Editor.currentResizable) { Editor.removeResizeHandles(Editor.currentResizable); Editor.currentResizable = null; }
+        Editor.hideImageToolbar();
+        return;
+      }
+      var target = e.target;
+      var resizableTarget = target.closest('.resizable-image-container');
+      if (target.classList.contains('resize-handle')) { Editor.startResizing(e, target); return; }
+      if (Editor.currentResizable && Editor.currentResizable !== resizableTarget) {
+        Editor.removeResizeHandles(Editor.currentResizable); Editor.currentResizable = null;
+      }
+      if (resizableTarget) {
+        if (Editor.currentResizable !== resizableTarget) {
+          Editor.currentResizable = resizableTarget;
+          Editor.addResizeHandles(resizableTarget);
+          Editor.selectedImageContainer = resizableTarget;
+          Editor.showImageToolbar();
+        }
+        e.stopPropagation();
+      } else {
+        if (Editor.currentResizable) { Editor.removeResizeHandles(Editor.currentResizable); Editor.currentResizable = null; }
+        Editor.hideImageToolbar();
+        Editor.selectedImageContainer = null;
+      }
+    },
+
+    addResizeHandles: function (element) {
+      Editor.removeResizeHandles(element);
+      ['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'].forEach(function (pos) {
+        var handle = document.createElement('div');
+        handle.className = 'resize-handle resize-' + pos;
+        handle.dataset.direction = pos;
+        element.appendChild(handle);
+      });
+      element.classList.add('is-resizable-active');
+    },
+    removeResizeHandles: function (element) {
+      element.querySelectorAll('.resize-handle').forEach(function (h) { h.remove(); });
+      element.classList.remove('is-resizable-active');
+    },
+    startResizing: function (e, handle) {
+      if (!Editor.currentResizable) return;
+      e.preventDefault(); e.stopPropagation();
+      Editor.currentHandle = handle;
+      Editor.startMouseX = e.clientX; Editor.startMouseY = e.clientY;
+      Editor.startWidth = Editor.currentResizable.offsetWidth;
+      Editor.startHeight = Editor.currentResizable.offsetHeight;
+      Editor.startAspectRatio = Editor.startWidth / Editor.startHeight;
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = getComputedStyle(handle).cursor;
+    },
+    doResize: function (e) {
+      if (!Editor.currentResizable || !Editor.currentHandle) return;
+      e.preventDefault(); e.stopPropagation();
+      var dx = e.clientX - Editor.startMouseX;
+      var dy = e.clientY - Editor.startMouseY;
+      var direction = Editor.currentHandle.dataset.direction;
+      var newWidth = Editor.startWidth, newHeight = Editor.startHeight;
+      if (direction.includes('e')) newWidth = Editor.startWidth + dx;
+      else if (direction.includes('w')) newWidth = Editor.startWidth - dx;
+      if (direction.includes('s')) newHeight = Editor.startHeight + dy;
+      else if (direction.includes('n')) newHeight = Editor.startHeight - dy;
+      if (direction.length === 2) {
+        var imageElement = Editor.currentResizable.querySelector('img');
+        if (imageElement && imageElement.naturalWidth && imageElement.naturalHeight) {
+          Editor.startAspectRatio = imageElement.naturalWidth / imageElement.naturalHeight;
+        }
+        var currentRatio = newWidth / newHeight;
+        if (Math.abs(currentRatio - Editor.startAspectRatio) > 0.01) {
+          if (Math.abs(dx) > Math.abs(dy)) newHeight = newWidth / Editor.startAspectRatio;
+          else newWidth = newHeight * Editor.startAspectRatio;
+        }
+      }
+      newWidth = Math.max(50, newWidth);
+      newHeight = Math.max(50, newHeight);
+      Editor.currentResizable.style.width = newWidth + 'px';
+      Editor.currentResizable.style.height = newHeight + 'px';
+      var innerImage = Editor.currentResizable.querySelector('img');
+      if (innerImage) { innerImage.style.width = '100%'; innerImage.style.height = '100%'; innerImage.style.objectFit = 'contain'; }
+    },
+    stopResizing: function () {
+      Editor.currentHandle = null;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    },
+    enableResizing: function () {
+      var oldStyle = byId('editor-style');
+      if (oldStyle) oldStyle.remove();
+      var style = document.createElement('style');
+      style.id = 'editor-style';
+      style.innerHTML =
+        '.ws-overlay .ws-box, .ws-overlay .ws-lines { resize: vertical; overflow: hidden; position: relative; min-height: 50px; }'
+        + '@media print { .ws-overlay .ws-box, .ws-overlay .ws-lines { resize: none; overflow: visible; } }'
+        + '#worksheetContent[contenteditable="true"] .ws-box:hover,'
+        + '#worksheetContent[contenteditable="true"] .ws-lines:hover,'
+        + '#worksheetContent[contenteditable="true"] table:hover,'
+        + '#worksheetContent[contenteditable="true"] .resizable-image-container:not(.is-resizable-active):hover {'
+        + '  outline: 2px dashed #a2d2ff; cursor: text; }';
+      document.head.appendChild(style);
+    },
+    showImageToolbar: function () {
+      var toolbar = byId('imageToolbar');
+      if (!toolbar || !Editor.selectedImageContainer) return;
+      var rect = Editor.selectedImageContainer.getBoundingClientRect();
+      var scroll = byId('ws-scroll');
+      var scRect = scroll ? scroll.getBoundingClientRect() : { top: 0, left: 0, width: 0 };
+      toolbar.classList.remove('d-none');
+      var tw = toolbar.offsetWidth, th = toolbar.offsetHeight;
+      var topPos = rect.top - scRect.top + (scroll ? scroll.scrollTop : 0) - th - 10;
+      var leftPos = rect.left - scRect.left + (scroll ? scroll.scrollLeft : 0) + (rect.width / 2) - (tw / 2);
+      if (leftPos < 0) leftPos = 0;
+      if (leftPos + tw > scRect.width) leftPos = Math.max(0, scRect.width - tw);
+      if (topPos < 0) topPos = rect.bottom - scRect.top + (scroll ? scroll.scrollTop : 0) + 10;
+      toolbar.style.left = leftPos + 'px';
+      toolbar.style.top = topPos + 'px';
+    },
+    hideImageToolbar: function () {
+      var toolbar = byId('imageToolbar');
+      if (toolbar) { toolbar.classList.add('d-none'); Editor.selectedImageContainer = null; }
+    },
+    showContextMenu: function (e, menu) {
+      var target = e.target;
+      var items = [];
+      Editor.currentTarget = target;
+      var td = target.closest('td, th');
+      if (td) {
+        items = [
+          { label: '<i class="bi bi-arrow-bar-up"></i> 行を上に追加', action: function () { Editor.tableAction('addRowUp', td); } },
+          { label: '<i class="bi bi-arrow-bar-down"></i> 行を下に追加', action: function () { Editor.tableAction('addRowDown', td); } },
+          { divider: true },
+          { label: '<i class="bi bi-arrow-bar-left"></i> 列を左に追加', action: function () { Editor.tableAction('addColLeft', td); } },
+          { label: '<i class="bi bi-arrow-bar-right"></i> 列を右に追加', action: function () { Editor.tableAction('addColRight', td); } },
+          { divider: true },
+          { label: '<i class="bi bi-trash"></i> 行を削除', action: function () { Editor.tableAction('delRow', td); } },
+          { label: '<i class="bi bi-trash"></i> 列を削除', action: function () { Editor.tableAction('delCol', td); } }
+        ];
+      } else if (target.classList.contains('ws-box') || target.classList.contains('ws-lines')) {
+        items = [
+          { label: '<i class="bi bi-files"></i> ボックスを複製', action: function () { Editor.cloneElement(target); } },
+          { label: '<i class="bi bi-trash"></i> 削除', action: function () { target.remove(); } }
+        ];
+      } else if (target.closest('.resizable-image-container')) {
+        var container = target.closest('.resizable-image-container');
+        items = [
+          { label: '<i class="bi bi-files"></i> 画像を複製', action: function () { Editor.cloneElement(container); } },
+          { label: '<i class="bi bi-trash"></i> 削除', action: function () { container.remove(); } }
+        ];
+      } else {
+        items = [
+          { label: '<i class="bi bi-type-bold"></i> 太字', action: function () { document.execCommand('bold'); } },
+          { label: '<i class="bi bi-trash"></i> 削除', action: function () { target.remove(); } }
+        ];
+      }
+      if (items.length === 0) return;
+      menu.innerHTML = '';
+      items.forEach(function (item) {
+        if (item.divider) { menu.innerHTML += '<div class="dropdown-divider"></div>'; }
+        else {
+          var a = document.createElement('a');
+          a.className = 'dropdown-item';
+          a.href = '#';
+          a.innerHTML = item.label;
+          a.onclick = function (ev) { ev.preventDefault(); item.action(); };
+          menu.appendChild(a);
+        }
+      });
+      menu.style.left = e.pageX + 'px';
+      menu.style.top = e.pageY + 'px';
+      menu.style.display = 'block';
+    },
+    tableAction: function (type, cell) {
+      var row = cell.parentElement;
+      var table = row.parentElement.parentElement;
+      var rowIndex = row.rowIndex;
+      var colIndex = cell.cellIndex;
+      switch (type) {
+        case 'addRowUp': table.insertRow(rowIndex); break;
+        case 'addRowDown': table.insertRow(rowIndex + 1); break;
+        case 'delRow': table.deleteRow(rowIndex); break;
+        case 'addColLeft': for (var i = 0; i < table.rows.length; i++) table.rows[i].insertCell(colIndex); break;
+        case 'addColRight': for (var j = 0; j < table.rows.length; j++) table.rows[j].insertCell(colIndex + 1); break;
+        case 'delCol': for (var k = 0; k < table.rows.length; k++) table.rows[k].deleteCell(colIndex); break;
+      }
+    },
+    cloneElement: function (el) {
+      var clone = el.cloneNode(true);
+      el.after(clone);
+      if (clone.classList.contains('resizable-image-container')) Editor.removeResizeHandles(clone);
+    }
+  };
+
+
+  /* ==========================================================
+   *  6. 単元情報の解決（コンパスの appState から）
+   * ========================================================== */
+  function resolveUnitInfo() {
+    var info = { grade: '', subject: '', unitName: '' };
+    try {
+      var unitId = (State.currentTask && State.currentTask.unitId) ||
+        (typeof appState !== 'undefined' && appState.unit ? appState.unit.id : '');
+      var u = null;
+      if (typeof appState !== 'undefined' && appState.unitList) {
+        u = appState.unitList.find(function (x) { return x.id === unitId; });
+        if (!u && appState.unit) u = appState.unitList.find(function (x) { return x.id === appState.unit.id; });
+      }
+      if (u) { info.grade = u.grade || ''; info.subject = u.subject || ''; info.unitName = u.title || ''; }
+    } catch (e) { /* 取得できなくても空で続行 */ }
+    return info;
+  }
+
+  // コンパスの UnitMaster タスクを内部形式へ正規化する。
+  function normalizeTask(task) {
+    return {
+      id: task.taskId,
+      unitId: task.unitId || '',
+      title: task.title || '無題',
+      description: task.desc || task.description || '',
+      category: task.category || '',
+      rubricHtml: '',
+      canvasData: null
+    };
+  }
+
+
+  /* ==========================================================
+   *  7. 児童モード（回答）
+   * ========================================================== */
+
+  // 児童：ワークシートを開く
+  function openStudent(task) {
+    if (!task || !task.taskId) { if (typeof handleError === 'function') handleError({ message: '課題が見つかりません' }); return; }
+    close();
+    State.mode = 'student';
+    State.currentTask = normalizeTask(task);
+    State.unitData = { unitInfo: resolveUnitInfo() };
+
+    buildOverlay();
+    byId('ws-topbar-title').textContent = State.currentTask.title;
+    byId('ws-student-tools').classList.remove('d-none');
+    var bar = byId('ws-bottombar');
+    bar.innerHTML =
+      '<button type="button" id="ws-status-sos" class="btn btn-outline-danger rounded-pill btn-sm fw-bold me-auto"><i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i> SOS</button>'
+      + '<button type="button" id="ws-submit-btn" class="btn btn-success rounded-pill fw-bold px-4"><i class="bi bi-send-fill" aria-hidden="true"></i> 提出</button>';
+    byId('ws-submit-btn').addEventListener('click', function () { submitStudentResponse('submitted'); });
+    byId('ws-status-sos').addEventListener('click', function () {
+      UI.toast('先生をよびましょう', 'info');
+    });
+
+    // 名前欄をコンパスのログイン名で初期化
+    var nameInput = byId('studentNameInput');
+    if (nameInput && typeof appState !== 'undefined' && appState.user && appState.user.name) {
+      nameInput.value = appState.user.name;
+    }
+
+    // 自動保存ループ & 離脱時の確定保存
+    autoSaveTimer = setInterval(autoSaveLocal, 10000);
+    pageHideHandler = autoSaveLocal;
+    window.addEventListener('pagehide', pageHideHandler);
+    visibilityHandler = function () { if (document.visibilityState === 'hidden') autoSaveLocal(); };
+    document.addEventListener('visibilitychange', visibilityHandler);
+
+    UI.showLoading();
+    Server.call('loadWorksheetFromDB', State.currentTask.id).then(function (data) {
+      if (!data || !data.htmlContent) {
+        byId('worksheetContent').innerHTML =
+          '<div class="d-flex flex-column align-items-center justify-content-center text-muted py-5" style="min-height:200mm;">'
+          + '<i class="bi bi-hourglass-split fs-1 mb-3" aria-hidden="true"></i>'
+          + '<p class="fs-5">先生がまだワークシートを用意していません</p></div>';
+        // 手書き・提出は不要なので無効化
+        byId('editorToolbar').classList.add('d-none');
+        byId('ws-bottombar').classList.add('d-none');
+        UI.hideLoading();
+        return;
+      }
+      byId('worksheetContent').innerHTML = data.htmlContent;
+      activateWorksheetScripts(byId('worksheetContent'));
+      if (data.canvasJson) State.currentTask.canvasData = data.canvasJson;
+
+      enableStudentInputs();
+      setTimeout(function () {
+        // 「入力優先」で開く：手書きは OFF で始め、回答欄をすぐタップして
+        // 書き込めるようにする（キャンバスは用意されるので、下地・前回の
+        // 手書きは表示され、手書きボタンでいつでも ON にできる）。
+        toggleDrawMode(false);
+        loadMyResponse().finally(function () { UI.hideLoading(); });
+      }, 300);
+    }).catch(function () {
+      byId('worksheetContent').innerHTML = '<div class="text-center text-danger py-5">読み込みに失敗しました</div>';
+      UI.hideLoading();
+    });
+  }
+
+  // 回答の提出／一時保存
+  function submitStudentResponse(status) {
+    if (!State.currentTask) {
+      return Swal.fire('ワークシートが開かれていません', '一覧からワークシートを選んでください', 'info');
+    }
+    var nameInput = byId('studentNameInput');
+    var name = nameInput ? nameInput.value : '';
+    var isPublicCheck = byId('isPublicCheck');
+    var isPublic = isPublicCheck ? isPublicCheck.checked : true;
+    if (!name && status === 'submitted') {
+      return Swal.fire('名前を入力してください', '', 'warning');
+    }
+
+    UI.showLoading();
+    var img = '';
+    if (State.fabricCanvas) img = State.fabricCanvas.toDataURL({ format: 'png', multiplier: 0.5 });
+
+    // 自己評価（◎○△）の収集
+    var evalText = '';
+    var rows = overlayEl.querySelectorAll('#worksheetContent table tr');
+    rows.forEach(function (r) {
+      var label = r.querySelector('td:first-child');
+      var activeBtn = r.querySelector('.eval-btn.active');
+      if (label && activeBtn) {
+        var val = activeBtn.getAttribute('data-value') || activeBtn.innerText;
+        evalText += '[' + label.innerText + ': ' + val.trim() + '] ';
+      }
+    });
+
+    // studentId は送らない（サーバーが Session から本人判定する）
+    Server.call('saveStudentResponse', {
+      taskId: State.currentTask.id,
+      studentName: name || '名無し',
+      canvasImage: img,
+      canvasJson: JSON.stringify(State.fabricCanvas ? State.fabricCanvas.toJSON() : {}),
+      textContent: evalText,
+      answersJson: collectStudentAnswers(),
+      status: status,
+      isPublic: isPublic
+    }).then(function () {
+      if (status === 'submitted') {
+        try { localStorage.removeItem(ANSWER_KEY_PREFIX + State.currentTask.id); } catch (e) { /* 無視 */ }
+      }
+      UI.toast(status === 'draft' ? '保存しました' : '提出しました！');
+    }).finally(function () { UI.hideLoading(); });
+  }
+
+  // 手書き＋回答欄を localStorage に自動保存（キー: mirai_ws_<taskId>）
+  function autoSaveLocal() {
+    if (State.mode !== 'student' || !State.currentTask || !State.fabricCanvas) return;
+    var key = ANSWER_KEY_PREFIX + State.currentTask.id;
+    try {
+      localStorage.setItem(key, JSON.stringify({
+        j: State.fabricCanvas.toJSON(),
+        a: collectStudentAnswers(),
+        t: Date.now()
+      }));
+    } catch (e) { /* 容量超過等は無視 */ }
+  }
+
+  // 自分の前回回答を復元（サーバー優先、なければ下書き）。添削通知も出す。
+  function loadMyResponse() {
+    return Server.call('getMyResponse', State.currentTask.id).then(function (resp) {
+      if (resp) {
+        if (resp.canvasJson && State.fabricCanvas) State.fabricCanvas.loadFromJSON(resp.canvasJson);
+        if (resp.answersJson) restoreStudentAnswers(resp.answersJson);
+        var chk = byId('isPublicCheck');
+        if (chk) chk.checked = (resp.isPublic === '' || resp.isPublic === true);
+        if (resp.feedbackText || resp.status === 'graded') {
+          var btn = byId('btnFeedback');
+          if (btn) {
+            btn.classList.remove('d-none');
+            btn.onclick = function () {
+              var commentHtml = resp.feedbackText
+                ? '<div class="text-start p-3 border rounded bg-light">' + UI.esc(resp.feedbackText).replace(/\n/g, '<br>') + '</div>'
+                : '（コメントなし）';
+              Swal.fire({ title: '先生からのコメント', html: commentHtml, icon: 'info' });
+            };
+            UI.toast('添削が届いています');
+          }
+        }
+      } else {
+        var local = null;
+        try { local = localStorage.getItem(ANSWER_KEY_PREFIX + State.currentTask.id); } catch (e) { /* 無視 */ }
+        if (local && State.fabricCanvas) {
+          var parsed = JSON.parse(local);
+          State.fabricCanvas.loadFromJSON(parsed.j);
+          if (parsed.a) restoreStudentAnswers(parsed.a);
+          UI.toast('下書きを復元しました');
+        }
+      }
+    }).catch(function () { /* 復元失敗は致命ではない */ });
+  }
+
+
+  /* ==========================================================
+   *  8. 先生モード（作成・編集）
+   * ========================================================== */
+
+  function openTeacherEditor(task) {
+    if (!task || !task.taskId) { if (typeof handleError === 'function') handleError({ message: '課題が見つかりません' }); return; }
+    close();
+    State.mode = 'teacher';
+    State.currentTask = normalizeTask(task);
+    State.unitData = { unitInfo: resolveUnitInfo() };
+
+    buildOverlay();
+    Editor.initOnce();
+    byId('ws-topbar-title').textContent = 'ワークシート作成・編集：' + State.currentTask.title;
+
+    // 先生用ツールバー
+    var tools = byId('ws-teacher-tools');
+    tools.classList.remove('d-none');
+    tools.innerHTML =
+      '<button type="button" id="ws-ai-api" class="btn btn-sm btn-outline-primary rounded-pill"><i class="bi bi-lightning-fill" aria-hidden="true"></i> AI自動生成</button>'
+      + '<button type="button" id="ws-ai-manual" class="btn btn-sm btn-outline-primary rounded-pill"><i class="bi bi-clipboard-plus" aria-hidden="true"></i> AI手動(コピペ)</button>'
+      + '<button type="button" id="ws-rubric-open" class="btn btn-sm btn-outline-warning text-dark rounded-pill"><i class="bi bi-grid-3x3" aria-hidden="true"></i> 評価</button>';
+    byId('ws-ai-api').addEventListener('click', function () { generateSingleWorksheet(); });
+    byId('ws-ai-manual').addEventListener('click', openManualAiModal);
+    byId('ws-rubric-open').addEventListener('click', openRubric);
+
+    // 保存バー
+    var bar = byId('ws-bottombar');
+    bar.innerHTML = '<button type="button" id="ws-save-btn" class="btn btn-primary rounded-pill px-4"><i class="bi bi-save" aria-hidden="true"></i> 保存</button>';
+    byId('ws-save-btn').addEventListener('click', saveCurrentWorksheet);
+
+    var ws = byId('worksheetContent');
+    ws.contentEditable = 'true';
+
+    UI.showLoading();
+    Server.call('loadWorksheetFromDB', State.currentTask.id).then(function (data) {
+      if (data && data.htmlContent) {
+        ws.innerHTML = data.htmlContent;
+        activateWorksheetScripts(ws);
+        State.currentTask.rubricHtml = data.rubricHtml || '';
+        if (data.canvasJson) State.currentTask.canvasData = data.canvasJson;
+      } else {
+        // まだ無い → 空のひな形（AI 作成の案内つき）
+        var info = State.unitData.unitInfo;
+        ws.innerHTML =
+          '<div class="ws-header-fixed"><div class="ws-header-left">'
+          + '<span class="ws-unit-name">' + UI.esc(info.grade) + ' ' + UI.esc(info.unitName) + '</span>'
+          + '<h1 class="ws-title">' + UI.esc(State.currentTask.title) + '</h1></div></div>'
+          + '<div class="my-5 text-center text-muted"><p>このワークシートはまだ空です。</p>'
+          + '<p class="small">上の「AI自動生成」または「AI手動(コピペ)」で本文を作れます。直接ここに書くこともできます。</p></div>';
+      }
+      Editor.attachContent();
+    }).finally(function () { UI.hideLoading(); });
+  }
+
+  // 現在のワークシートを保存
+  function saveCurrentWorksheet() {
+    if (!State.currentTask) return;
+    UI.showLoading();
+    var canvasJson = null;
+    if (State.fabricCanvas) canvasJson = State.fabricCanvas.toJSON();
+    var info = State.unitData ? State.unitData.unitInfo : {};
+    return Server.callTeacher('saveWorksheetToDB', {
+      taskId: State.currentTask.id,
+      unitName: info.unitName || '',
+      stepTitle: State.currentTask.title,
+      htmlContent: byId('worksheetContent').innerHTML,
+      jsonSource: State.currentTask,
+      canvasJson: canvasJson,
+      rubricHtml: State.currentTask.rubricHtml
+    }).then(function () { UI.toast('保存しました'); }).finally(function () { UI.hideLoading(); });
+  }
+
+  // API 自動生成（サーバーの Gemini 呼び出し）→ 保存 → 再描画
+  function generateSingleWorksheet() {
+    if (!State.currentTask) return;
+    UI.showLoading();
+    var info = State.unitData ? State.unitData.unitInfo : {};
+    Server.callTeacher('generateSingleWorksheet', {
+      grade: info.grade || '',
+      unitName: info.unitName || '',
+      stepTitle: State.currentTask.title,
+      description: State.currentTask.description || '',
+      ocrContext: ''
+    }).then(function (html) {
+      return Server.callTeacher('saveWorksheetToDB', {
+        taskId: State.currentTask.id,
+        unitName: info.unitName || '',
+        stepTitle: State.currentTask.title,
+        htmlContent: html,
+        jsonSource: State.currentTask
+      }).then(function () {
+        var ws = byId('worksheetContent');
+        ws.innerHTML = html;
+        activateWorksheetScripts(ws);
+        Editor.attachContent();
+        UI.toast('AI がワークシートを作成しました');
+      });
+    }).catch(function () {
+      Swal.fire('生成エラー', 'AI による生成に失敗しました。AI設定（Geminiキー）を確認してください。', 'error');
+    }).finally(function () { UI.hideLoading(); });
+  }
+
+  // 手動 AI（コピペ）：プロンプトをコピー → 外部 AI → 出力 HTML を貼り付け保存
+  function openManualAiModal() {
+    if (!State.currentTask) return Swal.fire('エラー', '課題が選択されていません。', 'warning');
+    var info = State.unitData ? State.unitData.unitInfo : {};
+    var wsPrompt = buildWsPrompt();
+    Swal.fire({
+      title: '<i class="bi bi-clipboard-plus me-2"></i>手動AI ワークシート作成',
+      html:
+        '<div class="text-start">'
+        + '<p class="small text-muted mb-1">1) このプロンプトをコピーして ChatGPT / Gemini に送信します。</p>'
+        + '<textarea id="ws-mai-prompt" class="form-control font-monospace mb-2" rows="8" style="font-size:.75rem;white-space:pre-wrap;">' + UI.esc(wsPrompt) + '</textarea>'
+        + '<button type="button" class="btn btn-primary w-100 mb-3" id="ws-mai-copy"><i class="bi bi-clipboard me-2"></i>プロンプトをコピー</button>'
+        + '<p class="small text-muted mb-1">2) AI が出力した HTML をここに貼り付けて保存します。</p>'
+        + '<textarea id="ws-mai-html" class="form-control font-monospace mb-2" rows="8" placeholder="AI が生成した HTML をここに貼り付け..." style="font-size:.75rem;"></textarea>'
+        + '</div>',
+      width: '90%',
+      showCancelButton: true,
+      confirmButtonText: 'この HTML を保存',
+      cancelButtonText: '閉じる',
+      didOpen: function () {
+        var copyBtn = document.getElementById('ws-mai-copy');
+        if (copyBtn) copyBtn.addEventListener('click', function () {
+          var el = document.getElementById('ws-mai-prompt');
+          if (!el) return;
+          if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(el.value);
+          else { el.select(); document.execCommand('copy'); }
+          copyBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>コピーしました！';
+        });
+      },
+      preConfirm: function () {
+        var raw = (document.getElementById('ws-mai-html') || {}).value || '';
+        if (!raw.trim()) { Swal.showValidationMessage('HTML を貼り付けてください。'); return false; }
+        return cleanAIOutput(raw);
+      }
+    }).then(function (r) {
+      if (!r.isConfirmed) return;
+      var html = r.value;
+      UI.showLoading();
+      Server.callTeacher('saveWorksheetToDB', {
+        taskId: State.currentTask.id,
+        unitName: info.unitName || '',
+        stepTitle: State.currentTask.title,
+        htmlContent: html,
+        jsonSource: State.currentTask
+      }).then(function () {
+        var ws = byId('worksheetContent');
+        ws.innerHTML = html;
+        activateWorksheetScripts(ws);
+        Editor.attachContent();
+        UI.toast('ワークシートを保存しました');
+      }).catch(function (e) {
+        Swal.fire('保存エラー', 'ワークシートの保存に失敗しました。', 'error');
+      }).finally(function () { UI.hideLoading(); });
+    });
+  }
+
+  // 手動 AI 用のプロンプト（サーバーの buildWorksheetPrompt と同等）
+  function buildWsPrompt() {
+    var info = State.unitData ? State.unitData.unitInfo : { grade: '', unitName: '' };
+    var grade = info.grade || '';
+    var unitName = info.unitName || '';
+    var title = State.currentTask.title || '';
+    var description = State.currentTask.description || '';
+    return 'あなたは「教育工学」と「クリエイティブ・コーディング」に精通したフルスタックエンジニアです。\n'
+      + '日本の小学校の授業で使う、高品質なワークシートのHTMLを生成してください。\n\n'
+      + '【授業情報】\n'
+      + '学年: ' + grade + '\n'
+      + '単元名: ' + unitName + '\n'
+      + '授業タイトル: ' + title + '\n'
+      + '活動内容: ' + description + '\n\n'
+      + '【出力形式の制約（厳守）】\n'
+      + '- HTMLの body 内部のみを出力すること。<!DOCTYPE>, <html>, <head>, <body> タグは不要。\n'
+      + '- Markdown記法は禁止。```html ブロックで囲まないこと。\n'
+      + '- 外部リソース（img src="https://...", CDN, 外部ライブラリ）は一切使用禁止。\n'
+      + '- すべて標準API（HTML, CSS, インラインSVG, JavaScript）のみで完結させること。\n\n'
+      + '【HTMLレイアウト構造（この構造を厳守すること）】\n'
+      + '<div class="ws-sheet">\n'
+      + '  <div class="ws-header-fixed"><div class="ws-header-left">\n'
+      + '    <span class="ws-unit-name">' + grade + ' ' + unitName + '</span>\n'
+      + '    <h1 class="ws-title">' + title + '</h1></div>\n'
+      + '    <table class="ws-meta-table"><tr>'
+      + '<td class="ws-meta-label">年</td><td class="ws-meta-input"></td>'
+      + '<td class="ws-meta-label">組</td><td class="ws-meta-input"></td>'
+      + '<td class="ws-meta-label">名前</td><td class="ws-meta-input" style="min-width:120px;"></td></tr></table>\n'
+      + '  </div>\n'
+      + '  <div class="ws-content"><!-- めあて・ヒント・問題・解答欄 --></div>\n'
+      + '  <div class="ws-footer-fixed"><div class="ws-assessment-grid">\n'
+      + '    <div class="ws-reflection-box"><span class="ws-reflection-title">ふりかえり</span>'
+      + '<div class="ws-box ws-lines" style="height:4.5em;"></div></div>\n'
+      + '    <div><table class="table table-bordered table-sm mb-0" style="font-size:.85em;text-align:center;">'
+      + '<tr><td class="bg-light">わかった</td><td>'
+      + '<button type="button" class="eval-btn" data-value="△">△</button>'
+      + '<button type="button" class="eval-btn" data-value="◯">◯</button>'
+      + '<button type="button" class="eval-btn" data-value="◎">◎</button></td></tr></table></div>\n'
+      + '  </div></div>\n'
+      + '</div>\n\n'
+      + '【ws-content 内に含めるセクション】\n'
+      + '1. 今日のめあて（背景 #e3f2fd, 左ボーダー #2196f3）。\n'
+      + '2. AIコーチのヒント（背景 #fff3e0, 左ボーダー #ff9800）。\n'
+      + '3. 学習課題・問題。\n'
+      + '4. 記述欄には class="ws-box"、罫線付きは class="ws-box ws-lines"。\n\n'
+      + '【美学】小学生が親しみやすい、余白と色の調和したデザインにしてください。';
+  }
+
+
+  /* ==========================================================
+   *  9. ルーブリック（評価基準）
+   * ========================================================== */
+  function openRubric() {
+    if (!State.currentTask) return Swal.fire('エラー', '課題を選択してください', 'warning');
+    var container = byId('rubricContainer');
+    container.innerHTML = State.currentTask.rubricHtml
+      || '<div class="text-center py-5 text-muted"><p class="mb-0">「AI作成」ボタンを押して評価基準を作成してください。</p></div>';
+    byId('ws-rubric-modal').classList.remove('d-none');
+  }
+
+  function generateRubric() {
+    UI.showLoading();
+    Server.callTeacher('generateRubricAI', {
+      unitName: State.unitData ? (State.unitData.unitInfo.unitName || '') : '',
+      stepTitle: State.currentTask.title,
+      description: State.currentTask.description
+    }).then(function (html) {
+      byId('rubricContainer').innerHTML = cleanAIOutput(html);
+    }).catch(function () {
+      Swal.fire('生成エラー', 'ルーブリックの生成に失敗しました。', 'error');
+    }).finally(function () { UI.hideLoading(); });
+  }
+
+  function saveRubric() {
+    State.currentTask.rubricHtml = byId('rubricContainer').innerHTML;
+    byId('ws-rubric-modal').classList.add('d-none');
+    saveCurrentWorksheet();
+  }
+
+
+  /* ==========================================================
+   *  10. 添削（グレーディング）
+   * ========================================================== */
+
+  /**
+   * 添削画面を開く。
+   * @param {Object} submission getTaskSubmissions / getSubmissionDetail 由来の1件。
+   *   期待フィールド: rowIndex, studentName, htmlContent(あれば), canvasJson,
+   *   teacherCanvasJson, feedbackText。htmlContent が無ければ getSubmissionDetail で補う。
+   */
+  function openGrading(submission) {
+    if (!submission || !submission.rowIndex) { if (typeof handleError === 'function') handleError({ message: '提出物が見つかりません' }); return; }
+    close();
+    State.mode = 'grading';
+    State.gradingRow = submission.rowIndex;
+
+    buildOverlay();
+    byId('ws-topbar-title').textContent = (submission.studentName || '') + ' さんの回答を添削';
+    byId('editorToolbar').classList.add('d-none');   // 添削では専用ツールバーは使わない
+    byId('paperArea').classList.add('d-none');
+    byId('drawCanvas').classList.add('d-none');
+
+    var bar = byId('ws-bottombar');
+    bar.innerHTML =
+      '<input type="text" id="feedbackTextInput" class="form-control me-2" placeholder="コメント..." style="max-width:480px;">'
+      + '<button type="button" id="ws-grade-save" class="btn btn-primary rounded-pill px-4"><i class="bi bi-send-fill" aria-hidden="true"></i> 返却</button>';
+    byId('ws-grade-save').addEventListener('click', saveGrading);
+
+    UI.showLoading();
+    // htmlContent が無ければ getSubmissionDetail で取得（canvasJson も一緒に得られる）
+    var need = (submission.htmlContent === undefined || submission.htmlContent === null);
+    var prep = need
+      ? Server.callTeacher('getSubmissionDetail', submission.rowIndex).then(function (d) {
+          submission.htmlContent = (d && d.htmlContent) || '';
+          if (d && d.canvasJson && !submission.canvasJson) submission.canvasJson = d.canvasJson;
+          return submission;
+        })
+      : Promise.resolve(submission);
+
+    prep.then(function (s) {
+      var container = byId('gradingContainer');
+      container.classList.remove('d-none');
+      container.innerHTML =
+        '<div id="gradingPaper" class="sheet"><div class="p-3">' + (s.htmlContent || '<div class="text-muted text-center py-5">この課題のワークシート本文が見つかりませんでした。</div>') + '</div></div>'
+        + '<canvas id="gradingCanvas"></canvas>';
+      activateWorksheetScripts(container);
+      byId('feedbackTextInput').value = s.feedbackText || '';
+
+      setTimeout(function () {
+        var paper = byId('gradingPaper');
+        var cv = byId('gradingCanvas');
+        if (!paper || !cv) { UI.hideLoading(); return; }
+        cv.width = paper.offsetWidth;
+        cv.height = paper.offsetHeight;
+        cv.style.position = 'absolute';
+        cv.style.top = paper.offsetTop + 'px';
+        cv.style.left = paper.offsetLeft + 'px';
+        cv.style.zIndex = 99;
+        var gCanvas = new fabric.Canvas('gradingCanvas', { isDrawingMode: true });
+        gCanvas.freeDrawingBrush.width = 3;
+        gCanvas.freeDrawingBrush.color = 'red';
+        // 既存の添削（先生の赤ペン）優先、なければ児童の手書きを土台にする
+        var base = s.teacherCanvasJson || s.canvasJson;
+        if (base) { try { gCanvas.loadFromJSON(base); } catch (e) { /* 無視 */ } }
+        State.gradingCanvas = gCanvas;
+        UI.hideLoading();
+      }, 400);
+    }).catch(function () {
+      Swal.fire('読込エラー', '提出物の読み込みに失敗しました。', 'error');
+      UI.hideLoading();
+    });
+  }
+
+  function saveGrading() {
+    if (!State.gradingRow) return;
+    UI.showLoading();
+    Server.callTeacher('saveFeedback', {
+      rowIndex: State.gradingRow,
+      feedbackText: byId('feedbackTextInput').value,
+      canvasJson: State.gradingCanvas ? JSON.stringify(State.gradingCanvas.toJSON()) : null
+    }).then(function () {
+      UI.toast('返却しました');
+      close();
+    }).finally(function () { UI.hideLoading(); });
+  }
+
+
+  /* ==========================================================
+   *  11. ひろば（ピア閲覧）— 読み取り専用
+   *      友だちの提出物を、入力も提出もできない形で見せる。
+   *      手書きは操作できない fabric キャンバスに描くだけ。
+   * ========================================================== */
+
+  // 児童：友だちのワークシートを読み取り専用で開く。
+  // response: { responseId, taskId, studentName, canvasImage, canvasJson, reactions }
+  function openPeer(response) {
+    if (!response || !response.taskId) {
+      if (typeof handleError === 'function') handleError({ message: '作品が見つかりません' });
+      return;
+    }
+    close();
+    State.mode = 'peer';
+    State.currentTask = { id: response.taskId, title: response.studentName || '', canvasData: response.canvasJson || null };
+    State.unitData = { unitInfo: resolveUnitInfo() };
+
+    buildOverlay();
+    byId('ws-topbar-title').textContent = (response.studentName || 'おともだち') + ' さんのワークシート';
+    // 手書き・画像・提出などの操作ツールは出さない（読み取り専用）
+    byId('editorToolbar').classList.add('d-none');
+    buildPeerReactionBar(response);
+
+    UI.showLoading();
+    Server.call('loadWorksheetFromDB', response.taskId).then(function (data) {
+      var ws = byId('worksheetContent');
+      if (!data || !data.htmlContent) {
+        ws.innerHTML = '<div class="d-flex flex-column align-items-center justify-content-center text-muted py-5" style="min-height:200mm;">'
+          + '<i class="bi bi-hourglass-split fs-1 mb-3" aria-hidden="true"></i>'
+          + '<p class="fs-5">ワークシートが見つかりませんでした</p></div>';
+        UI.hideLoading();
+        return;
+      }
+      ws.innerHTML = data.htmlContent;
+      activateWorksheetScripts(ws);
+      // 完全に読み取り専用にする：編集不可・入力欄は無効・ポインタも殺す
+      ws.contentEditable = 'false';
+      ws.querySelectorAll('[contenteditable]').forEach(function (el) { el.contentEditable = 'false'; });
+      ws.style.pointerEvents = 'none';
+      setTimeout(function () {
+        renderPeerCanvas(response.canvasJson);
+        UI.hideLoading();
+      }, 300);
+    }).catch(function () {
+      byId('worksheetContent').innerHTML = '<div class="text-center text-danger py-5">読み込みに失敗しました</div>';
+      UI.hideLoading();
+    });
+  }
+
+  // 友だちの手書きを、操作できない fabric キャンバスに描く（下敷き表示のみ）。
+  function renderPeerCanvas(canvasJson) {
+    if (typeof fabric === 'undefined') return;
+    var cv = byId('drawCanvas');
+    var pp = byId('paperArea');
+    if (!cv) return;
+    cv.classList.remove('d-none');
+    cv.style.position = 'absolute';
+    cv.style.left = '0';
+    cv.style.top = '0';
+    if (pp) { cv.width = pp.offsetWidth; cv.height = pp.offsetHeight; }
+    var canvas;
+    try {
+      canvas = new fabric.Canvas('drawCanvas', { isDrawingMode: false, selection: false, skipTargetFind: true });
+    } catch (e) { return; }
+    if (canvasJson) {
+      try {
+        canvas.loadFromJSON(canvasJson, function () {
+          canvas.forEachObject(function (o) { o.selectable = false; o.evented = false; });
+          canvas.renderAll();
+        });
+      } catch (e) { /* 復元失敗は無視 */ }
+    }
+    // キャンバス層はイベントを受けない（本文もろとも読み取り専用）
+    var cnt = overlayEl ? overlayEl.querySelector('.canvas-container') : null;
+    if (cnt) cnt.style.pointerEvents = 'none';
+    State.peerCanvas = canvas;
+  }
+
+  // リアクションバー（スタンプ 👍💮👀✨ ＋ 短いコメント）。
+  function buildPeerReactionBar(response) {
+    var bar = byId('ws-bottombar');
+    var stamps = ['👍', '💮', '👀', '✨'];
+    var btns = stamps.map(function (s) {
+      return '<button type="button" class="btn btn-outline-primary rounded-circle ws-reaction-stamp" data-stamp="' + UI.esc(s) + '" '
+        + 'style="width:44px;height:44px;font-size:1.3rem;line-height:1;padding:0;" aria-label="スタンプ ' + UI.esc(s) + '">' + s + '</button>';
+    }).join('');
+    bar.innerHTML =
+      '<div class="d-flex gap-2 align-items-center flex-wrap w-100">'
+      + '  <div class="d-flex gap-1 me-2">' + btns + '</div>'
+      + '  <input type="text" id="ws-peer-comment" class="form-control form-control-sm" maxlength="40" '
+      + '         placeholder="ひとことコメント（40文字まで）" style="flex:1 1 160px;min-width:120px;max-width:280px;">'
+      + '  <button type="button" id="ws-peer-comment-send" class="btn btn-primary rounded-pill btn-sm px-3"><i class="bi bi-send-fill" aria-hidden="true"></i> おくる</button>'
+      + '  <span id="ws-peer-reactions" class="ms-auto small text-muted d-flex flex-wrap align-items-center gap-1"></span>'
+      + '</div>';
+    bar.querySelectorAll('.ws-reaction-stamp').forEach(function (b) {
+      b.addEventListener('click', function () { sendPeerReaction(response, 'stamp', b.getAttribute('data-stamp')); });
+    });
+    byId('ws-peer-comment-send').addEventListener('click', function () {
+      var el = byId('ws-peer-comment');
+      var val = (el.value || '').trim().slice(0, 40);
+      if (!val) return;
+      sendPeerReaction(response, 'comment', val);
+      el.value = '';
+    });
+    renderPeerReactionSummary(response.reactions);
+  }
+
+  // リアクションを送る（child→child）。fromName は表示名のみ。studentId は送らない。
+  function sendPeerReaction(response, type, value) {
+    var fromName = (typeof appState !== 'undefined' && appState.user && appState.user.name) ? appState.user.name : 'おともだち';
+    var reaction = { type: type, value: String(value).slice(0, 40), fromName: String(fromName).slice(0, 20) };
+    UI.showLoading();
+    // サーバーは targetResponseId を見る。仕様の responseId / taskId も併せて送る。
+    Server.call('savePeerReaction', {
+      responseId: response.responseId,
+      targetResponseId: response.responseId,
+      taskId: response.taskId,
+      reaction: reaction
+    }).then(function (res) {
+      if (res && res.reactions) response.reactions = res.reactions;
+      else response.reactions = (response.reactions || []).concat([reaction]);
+      renderPeerReactionSummary(response.reactions);
+      UI.toast('おくりました！');
+    }).catch(function () {
+      Swal.fire('エラー', 'おくれませんでした。もう一度ためしてね。', 'error');
+    }).finally(function () { UI.hideLoading(); });
+  }
+
+  // 届いているリアクションを安全に（エスケープ・短く）表示する。
+  function renderPeerReactionSummary(reactions) {
+    var el = byId('ws-peer-reactions');
+    if (!el) return;
+    var arr = Array.isArray(reactions) ? reactions : [];
+    if (!arr.length) { el.innerHTML = ''; return; }
+    el.innerHTML = arr.slice(-12).map(function (r) {
+      if (!r) return '';
+      if (r.type === 'stamp') return '<span class="fs-6">' + UI.esc(String(r.value || '').slice(0, 4)) + '</span>';
+      var who = UI.esc(String(r.fromName || '').slice(0, 20));
+      var txt = UI.esc(String(r.value || '').slice(0, 40));
+      return '<span class="badge bg-light text-dark border">' + who + '：' + txt + '</span>';
+    }).join('');
+  }
+
+
+  /* ==========================================================
+   *  12. 公開 API
+   * ========================================================== */
+  return {
+    openStudent: openStudent,
+    openTeacherEditor: openTeacherEditor,
+    openGrading: openGrading,
+    openPeer: openPeer,
+    close: close
+  };
+})();
+</script>

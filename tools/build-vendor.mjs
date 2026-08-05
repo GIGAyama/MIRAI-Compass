@@ -118,6 +118,8 @@ const BANNER = (what) => `<!--
     ['sweetalert2.all.min.js', p('sweetalert2', 'dist', 'sweetalert2.all.min.js')],
     ['chart.umd.js', p('chart.js', 'dist', 'chart.umd.js')],
     ['Sortable.min.js', p('sortablejs', 'Sortable.min.js')],
+    // ワークシートの手書き・添削キャンバス（統合で取り込み。学校で CDN が塞がれても動くよう自己ホスト）
+    ['fabric.min.js', p('fabric', 'dist', 'fabric.min.js')],
   ];
   let out = BANNER(parts.map(([n]) => n).join(' + '));
   for (const [name, file] of parts) {
