@@ -28,18 +28,56 @@
 
 プロジェクトは以下のファイルで構成されています。
 
-/  
-├── Code.gs           \# サーバーサイドロジック (DB操作、APIエンドポイント)  
-├── index.html        \# エントリーポイント (ライブラリ読み込み、ファイル結合)  
-├── css.html          \# スタイルシート (デザイン定義)  
-├── js\_core.html      \# 共通ロジック (設定、データ管理、通信)  
-├── js\_student.html   \# 児童用画面ロジック  
-├── js\_teacher.html   \# 先生用画面ロジック  
-└── docs/             \# PWAシェル (GitHub Pages用・アプリとしてインストール可能にする)  
-    ├── index.html            \# シェル本体 (GAS本体を全画面表示)  
-    ├── manifest.webmanifest  \# PWAマニフェスト  
-    ├── sw.js                 \# Service Worker  
-    └── icons/                \# アプリアイコン
+```
+/
+├── code.gs             # サーバーサイドロジック (DB操作、APIエンドポイント)
+├── index.html          # エントリーポイント (ライブラリ読み込み、ファイル結合)
+├── css.html            # スタイルシート (デザイン定義)
+├── js_core.html        # 共通ロジック (設定、データ管理、通信)
+├── js_student.html     # 児童用画面ロジック
+├── js_teacher.html     # 先生用画面ロジック
+│
+├── vendor_css.html     # ⚠️ 生成物：Bootstrap CSS
+├── vendor_icons.html   # ⚠️ 生成物：使用中の Bootstrap Icons だけを SVG 化したもの
+├── vendor_js.html      # ⚠️ 生成物：Bootstrap JS / SweetAlert2 / Chart.js / Sortable
+│
+├── package.json        # ライブラリの版を固定している（原本）
+├── tools/
+│   ├── build-vendor.mjs    # vendor_*.html を作る
+│   ├── build-icons.mjs     # 透明を含まない apple-touch-icon を作る
+│   └── verify-generated.mjs# 生成物が原本と食い違っていないか確かめる
+├── scripts/check-project.mjs / quality.config.json   # 品質ゲート
+├── tests/              # 中核ロジックのテスト
+│
+└── docs/               # PWAシェル (GitHub Pages用)
+    ├── index.html            # シェル本体 (GAS本体を全画面表示)
+    ├── app.js                # シェルのロジック（CSP のため外部ファイル）
+    ├── install-hook.js       # beforeinstallprompt の捕捉（head 最上部）
+    ├── offline.html          # 圏外のときに出る画面
+    ├── manifest.webmanifest  # PWAマニフェスト
+    ├── sw.js                 # Service Worker
+    └── icons/                # アプリアイコン
+```
+
+### ⚠️ 編集してよいファイル / してはいけないファイル
+
+| ファイル | 編集してよいか |
+|---|---|
+| `code.gs` / `index.html` / `css.html` / `js_*.html` / `docs/*` | **ここを直す** |
+| `package.json` / `tools/*.mjs` | **ここを直す**（ライブラリの版や組み立て方） |
+| `vendor_css.html` / `vendor_icons.html` / `vendor_js.html` | **手で編集しない**（生成物） |
+
+**原本を直したら、必ず `npm run build` を走らせてから push してください。**
+忘れると、ビルドも静的解析も通るのにリポジトリの中身だけが古いまま残ります。
+CI（`npm run ci`）がこの食い違いを検出して落ちます。
+
+```bash
+npm ci          # ライブラリを版どおりに入れる
+npm run build   # vendor_*.html を作り直す
+npm run check   # 品質ゲート（GIGA Standard v5 の検査）
+npm test        # 中核ロジックのテスト
+npm run ci      # 上の全部（CI と同じもの）
+```
 
 ## **🚀 インストール & デプロイ手順**
 
@@ -47,16 +85,24 @@
 
 1. **プロジェクトの作成**:  
    * [Google Apps Script](https://script.google.com/) にアクセスし、「新しいプロジェクト」を作成します。  
-2. **ファイルの作成**:  
-   * エディタ上で上記の「ファイル構成」にある6つのファイルを作成し、それぞれのコードを貼り付けます。  
-   * ※ Code.gs 以外のファイルは、拡張子を .html として作成してください。  
-3. **デプロイ**:  
+2. **生成物を作る**:
+   * 手元で `npm ci && npm run build` を実行します。
+     `vendor_css.html` / `vendor_icons.html` / `vendor_js.html` が作られます。
+     これらはライブラリ本体で、**GAS に貼るファイルに含まれます**。
+3. **ファイルの作成**:
+   * エディタ上で以下の **9つ** のファイルを作成し、それぞれのコードを貼り付けます。
+     `code.gs` / `index.html` / `css.html` / `js_core.html` / `js_student.html` /
+     `js_teacher.html` / `vendor_css.html` / `vendor_icons.html` / `vendor_js.html`
+   * ※ `code.gs` 以外のファイルは、拡張子を `.html` として作成してください。
+   * ※ `vendor_*.html` は生成物です。GAS のエディタ上で編集しないでください。
+     ライブラリを更新するときは、手元で `npm run build` し直して貼り替えます。
+4. **デプロイ**:  
    * 右上の「デプロイ」ボタン \> 「新しいデプロイ」を選択。  
    * **種類の選択**: 「ウェブアプリ」  
    * **次のユーザーとして実行**: 「自分」  
    * **アクセスできるユーザー**: 「全員」（または「Googleアカウントを持つ全員」）  
    * 「デプロイ」をクリックし、発行された **ウェブアプリURL** をコピーします。  
-4. **初回セットアップ**:  
+5. **初回セットアップ**:  
    * 発行されたURLにアクセスします。  
    * 「初期設定を開始する」ボタンが表示されるのでクリックします（Googleドライブにデータベース用スプレッドシートが自動生成されます）。  
    * 先生用ログイン（初期パスワード: admin）で入り、名簿や単元を登録してください。
@@ -102,13 +148,56 @@ https://<ユーザー名>.github.io/MIRAI-Compass/?app=<GASウェブアプリURL
 * **Backend**: Google Apps Script (GAS)  
 * **Database**: Google Spreadsheet  
 * **Frontend**: HTML5, CSS3, JavaScript (ES6)  
-* **Libraries (CDN)**:  
-  * [Bootstrap 5](https://getbootstrap.com/) (UI Framework)  
-  * [SweetAlert2](https://sweetalert2.github.io/) (Modals)  
-  * [Chart.js](https://www.chartjs.org/) (Data Visualization)  
-  * [Sortable.js](https://sortablejs.github.io/Sortable/) (Drag & Drop)  
-  * [SheetJS (xlsx)](https://sheetjs.com/) (Excel Import)  
-  * [Google Fonts](https://fonts.google.com/) (Zen Maru Gothic)
+* **Libraries（すべて自己ホスト。CDN から取る実行コードは 0 バイト）**:
+  * [Bootstrap 5](https://getbootstrap.com/) 5.3.0 (UI Framework)
+  * [Bootstrap Icons](https://icons.getbootstrap.com/) 1.11.1 — 使用中の53種類のみ SVG マスク化（229KB → 32KB）
+  * [SweetAlert2](https://sweetalert2.github.io/) 11.26.25 (Modals)
+  * [Chart.js](https://www.chartjs.org/) 4.5.1 (Data Visualization)
+  * [Sortable.js](https://sortablejs.github.io/Sortable/) 1.15.0 (Drag & Drop)
+  * [Google Fonts](https://fonts.google.com/) (Zen Maru Gothic) — **これだけは外部から読む**
+
+> **なぜ実行コードを自己ホストするのか。**
+> 学校のネットワークは `cdn.jsdelivr.net` を塞いでいることがあります。
+> 塞がれた状態でこのアプリを開くと、白い画面ではなく
+> **「Bootstrap が当たっていない素の HTML が半分だけ動く」**という壊れ方をしました。
+> ローディング画面が消えず、`d-none` が効かないので児童画面と先生用ボタンが
+> 同時に出て、`Swal` / `Chart` / `Sortable` がすべて `undefined` になります。
+> 児童からは「壊れている」としか見えず、原因がアプリの外にあるので
+> 先生が調べても分かりません。
+>
+> Google Fonts だけは外部のままにしています。届かなくても**字の形が変わるだけ**で
+> アプリは動くからです（`css.html` で端末側の日本語フォントを後ろに並べてあります）。
+> 日本語フォントを自己ホストすると初回転送が数MBになり、
+> 校内Wi-Fiで40人が同時に開くという、いちばん避けたい状況を自分で作ります。
+
+## **🔒 セキュリティ設計と、いま分かっている課題**
+
+| 項目 | 状態 |
+|---|---|
+| 秘密情報 | `PropertiesService`（スクリプトプロパティ）に保存。コードに直書きしていない |
+| 排他制御 | 書き込み系 12関数すべてに `LockService` + `try...finally` |
+| CSP | `docs/` シェルには適用済み（`script-src 'self'`、インライン無し）。GAS 本体は後述 |
+| 外部からの実行コード | 0 バイト |
+
+### ⚠️ 教員用 API に本人確認がありません（未修正）
+
+`changeTeacherPassword` / `initSystem` / `saveClassRoster` / `deleteUnitTask` /
+`savePortfolioFeedback` などの教員向け関数は、`google.script.run` から直接呼べます。
+画面側の `attemptTeacherLogin()` は `verifyPassword()` の戻り値で UI を出し分けて
+いるだけで、**フロントの出し分けは防御になりません。**
+
+直し方はデプロイの実行者設定（アクセスユーザー／アプリアカウント）と、
+児童が Google アカウントを持つかどうかで変わります。本番で確かめられないまま
+変えると全教員で認可が通らなくなり授業が止まるため、**このロールアウトでは
+変更していません。** 詳細と対処案は `AUDIT.md` の B5 を参照してください。
+
+### GAS 本体に CSP を入れていない理由
+
+GAS は `.gs` と `.html` しか置けず、JavaScript は `include()` でインラインの
+`<script>` として埋め込まれます。つまり **`script-src 'self'` は構造上成立しません。**
+`'unsafe-inline'` を足せば入れられますが、それでは CSP を入れた意味がほとんど
+無くなります。代わりに、**外部から読む実行コードを 0 にする**ことで
+攻撃面を減らしました。`docs/` シェル側には本物の CSP が入っています。
 
 ## **🤝 外部連携について**
 
