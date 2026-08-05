@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.clasp.json
+.clasprc.json
+.env
+.env.*
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+
+# 検査・実測の作業ディレクトリ（成果物ではない）
+.audit/
