@@ -46,6 +46,112 @@ function runTeacher(fnName, args, onSuccess, onFailure) {
   r[fnName].apply(r, args || []);
 }
 
+// ==========================================
+//  ワークシート統合（js_worksheet.html への橋渡し）
+// ==========================================
+
+/**
+ * [モーダル] AI設定（Geminiキー・先生名）
+ * getAiConfig() で現在の設定状態を読み、saveAiConfig(key,name) で保存する。
+ * キーは空欄なら変更なし（サーバー側で既存を保持）。
+ */
+function openAiSettings() {
+  runTeacher('getAiConfig', [], function(cfg) {
+    cfg = cfg || {};
+    Swal.fire({
+      title: 'AI設定（Geminiキー）',
+      html:
+        '<div class="text-start">'
+        + '  <div class="mb-3">'
+        + '    <label class="form-label small fw-bold">Gemini APIキー</label>'
+        + '    <input type="password" id="ai-key" class="form-control" autocomplete="off" placeholder="変更するときだけ入力">'
+        + '    <div class="form-text small">現在: ' + (cfg.hasApiKey ? '<span class="text-success fw-bold">設定済み</span>' : '<span class="text-danger">未設定</span>') + ' ／ 空欄のまま保存すると変更されません。</div>'
+        + '  </div>'
+        + '  <div class="mb-1">'
+        + '    <label class="form-label small fw-bold">先生の名前</label>'
+        + '    <input type="text" id="ai-name" class="form-control" value="' + escapeHtml(cfg.teacherName || '') + '">'
+        + '  </div>'
+        + '</div>',
+      showCancelButton: true,
+      confirmButtonText: '保存',
+      cancelButtonText: '閉じる',
+      preConfirm: function() {
+        return {
+          key: (document.getElementById('ai-key') || {}).value || '',
+          name: (document.getElementById('ai-name') || {}).value || ''
+        };
+      }
+    }).then(function(r) {
+      if (!r.isConfirmed) return;
+      runTeacher('saveAiConfig', [r.value.key, r.value.name], function() {
+        showToast('success', 'AI設定を保存しました');
+      });
+    });
+  });
+}
+
+/**
+ * タスク編集モーダルから「ワークシート作成・編集」を開く。
+ * @param {string} taskId 対象タスクID
+ */
+function openWorksheetEditorForTask(taskId) {
+  var t = (dataStore.masterTasks || []).find(function(x){ return x.taskId === taskId; });
+  if (!t) { handleError({ message: '課題が見つかりません' }); return; }
+  Swal.close();
+  Worksheet.openTeacherEditor(t);
+}
+
+/**
+ * タスクの提出物一覧を表示し、選んだ提出物の添削（赤ペン）画面を開く。
+ * getTaskSubmissions → 一覧、行クリックで Worksheet.openGrading。
+ * @param {string} taskId 対象タスクID
+ */
+function openWorksheetSubmissions(taskId) {
+  Swal.close();
+  showLoading();
+  runTeacher('getTaskSubmissions', [taskId], function(subs) {
+    hideLoading();
+    subs = subs || [];
+    window._wsSubmissions = subs;
+    if (subs.length === 0) {
+      Swal.fire('提出物なし', 'まだ提出された回答はありません。', 'info');
+      return;
+    }
+    var rows = subs.map(function(s, i) {
+      var badge = (s.status === 'graded')
+        ? '<span class="badge bg-primary">添削済</span>'
+        : '<span class="badge bg-success">提出済</span>';
+      var when = s.submittedAt ? new Date(s.submittedAt).toLocaleString() : '';
+      return '<button type="button" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" '
+        + 'data-ws-sub="' + i + '">'
+        + '<span class="fw-bold text-truncate">' + escapeHtml(s.studentName || '名無し') + '</span>'
+        + '<span class="d-flex align-items-center gap-2">' + badge + '<small class="text-muted">' + escapeHtml(when) + '</small></span>'
+        + '</button>';
+    }).join('');
+    Swal.fire({
+      title: '提出物（' + subs.length + '件）',
+      html: '<div class="list-group text-start" id="ws-sub-list">' + rows + '</div>',
+      showConfirmButton: false,
+      showCloseButton: true,
+      width: '600px',
+      didOpen: function() {
+        var popup = Swal.getPopup();
+        popup.querySelectorAll('[data-ws-sub]').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var idx = parseInt(btn.getAttribute('data-ws-sub'), 10);
+            var sub = window._wsSubmissions[idx];
+            Swal.close();
+            Worksheet.openGrading(sub);
+          });
+        });
+      }
+    });
+  }, function(err) {
+    hideLoading();
+    handleError(err);
+  });
+}
+
 /**
  * [モーダル] 先生の管理（メールアドレスの許可リスト）
  * 現在の先生一覧を表示し、追加・削除できる。
@@ -970,6 +1076,16 @@ function openTeacherTaskEditModal(taskId) {
           <label class="form-check-label fw-bold" for="ed-teacher">先生タスク（固定表示）にする</label>
           <div class="form-text x-small ps-1">ONにすると、指定した時数に自動的に固定表示されます。</div>
         </div>
+
+        ${isNew ? '' : `
+        <div class="card p-2 bg-light border-0 mb-1">
+          <div class="small fw-bold text-muted mb-2"><i class="bi bi-journal-richtext"></i> みらいパスポート ワークシート</div>
+          <div class="d-grid gap-2">
+            <button type="button" class="btn btn-outline-primary btn-sm" onclick="openWorksheetEditorForTask('${escJs(task.taskId)}')"><i class="bi bi-pencil-square me-1"></i>ワークシート作成・編集</button>
+            <button type="button" class="btn btn-outline-info btn-sm" onclick="openWorksheetSubmissions('${escJs(task.taskId)}')"><i class="bi bi-people-fill me-1"></i>提出物を見る・添削する</button>
+          </div>
+        </div>
+        `}
       </div>`,
     showCancelButton: true,
     confirmButtonText: '保存',

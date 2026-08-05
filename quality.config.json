@@ -16,6 +16,7 @@
     "js_core.html",
     "js_student.html",
     "js_teacher.html",
+    "js_worksheet.html",
     "docs/index.html",
     "docs/app.js",
     "docs/install-hook.js",

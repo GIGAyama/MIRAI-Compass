@@ -727,7 +727,11 @@ function hideLoading() { const e = document.getElementById('loading'); if (e) e.
  * ※ アプリ内ワークシートUIはこの後の統合フェーズで組み込みます。現状はプレースホルダ。
  * @param {string} taskId - 現在取り組んでいる課題ID
  */
-function launchPassport(taskId){ Swal.fire('準備中','ワークシート機能はこの後の統合で組み込みます。','info'); }
+function launchPassport(taskId){
+  var t = (dataStore.masterTasks || []).find(function(x){ return x.taskId === taskId; });
+  if (t) { Worksheet.openStudent(t); }
+  else { handleError({ message: '課題が見つかりません' }); }
+}
 
 // ==========================================
 //  提示モード・印刷（一斉授業で使う）
@@ -811,6 +815,7 @@ function toggleSettings() {
       <div class="text-start">
         <div class="d-grid gap-2">
           <button class="btn btn-outline-secondary btn-sm" onclick="openTeacherManager()">先生の管理（メールアドレス）</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="openAiSettings()">AI設定（Geminiキー）</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="openRosterManagerModal()">名簿管理</button>
         </div>
       </div>
