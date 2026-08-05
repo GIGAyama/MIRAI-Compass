@@ -43,6 +43,20 @@ const read = (root, f) => readFileSync(join(root, f), 'utf8');
 const has = (root, f) => existsSync(join(root, f));
 
 /**
+ * トップレベル関数 `function name(...) { ... }` の本文（おおよそ）を返す。
+ * ブレース対応ではなく「次のトップレベル function まで」で切る。
+ * 文字列や JSON テンプレート内の { } に振り回されないための割り切り。
+ * requireTeacher は各関数の先頭で呼ぶ約束なので、多少後ろを削っても判定は保てる。
+ */
+export function fnSlice(src, name) {
+  const m = src.match(new RegExp('function\\s+' + name + '\\s*\\('));
+  if (!m) return null;
+  const rest = src.slice(m.index + m[0].length);
+  const next = rest.search(/\nfunction\s/);
+  return next < 0 ? rest : rest.slice(0, next);
+}
+
+/**
  * 各検査は { id, title, run(ctx) } を持ち、run は
  * { ok: boolean, detail: string } を返す。
  */
@@ -189,6 +203,43 @@ export function buildChecks(cfg) {
         }
         for (const m of s.matchAll(/\bon[a-z]+\s*=\s*["']/gi)) bad.push(`インラインハンドラ ${m[0].trim()}`);
         return { ok: bad.length === 0, detail: bad.length ? [...new Set(bad)].join(', ') + '（CSP を入れると黙って動かなくなる）' : '無し' };
+      },
+    },
+
+    // ---------------- SEC. サーバー認可（getActiveUser 移行の砦） ----------------
+    {
+      id: 'SEC_PRIVILEGED_FN_GUARDED', title: '先生専用関数がサーバー側で requireTeacher している',
+      run: ({ root }) => {
+        const f = 'code.gs';
+        if (!has(root, f)) return { ok: false, detail: 'code.gs が無い' };
+        const s = stripComments(read(root, f), 'js');
+        // 画面側の出し分けは防御にならない。google.script.run から直接呼べる
+        // 教員向け関数は、本文の先頭でサーバーが本人確認していなければならない。
+        const fns = [
+          'saveWorksheetToDB', 'saveFeedback', 'batchSaveFeedback', 'generateSingleWorksheet',
+          'generateRubricAI', 'generateBatchComments', 'getDashboardData', 'getTaskSubmissions',
+          'getSubmissionDetail', 'saveAiConfig', 'createWorksheetsForUnit', 'saveClassRoster',
+          'deleteUnitTask', 'createNewUnit', 'importUnitJson', 'archiveUnitData',
+        ];
+        const bad = [];
+        for (const fn of fns) {
+          const body = fnSlice(s, fn);
+          if (body === null) { bad.push(`${fn}（関数が無い）`); continue; }
+          if (!/MiraiAuth\.requireTeacher\s*\(/.test(body)) bad.push(`${fn}（requireTeacher が無い）`);
+        }
+        return { ok: bad.length === 0, detail: bad.length ? '未ガード: ' + bad.join(', ') : `${fns.length} 関数すべてに requireTeacher あり` };
+      },
+    },
+    {
+      id: 'SEC_NO_PASSWORD_AUTH', title: 'パスワード認証を復活させていない（getActiveUser 移行の回帰防止）',
+      run: ({ root }) => {
+        const f = 'code.gs';
+        if (!has(root, f)) return { ok: false, detail: 'code.gs が無い' };
+        const s = stripComments(read(root, f), 'js');
+        const bad = [];
+        if (/\bTEACHER_PASS\b/.test(s)) bad.push('TEACHER_PASS');
+        if (/\bverifyPassword\s*\(/.test(s)) bad.push('verifyPassword(');
+        return { ok: bad.length === 0, detail: bad.length ? '復活している: ' + bad.join(', ') + '（認可は Session.getActiveUser 由来のメール許可制のみ）' : '無し（メール許可制のみ）' };
       },
     },
 

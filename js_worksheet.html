@@ -366,47 +366,57 @@ var Worksheet = (function () {
    *  4. Fabric キャンバス層（手書き・画像挿入）
    * ========================================================== */
 
+  // 手書きキャンバスを（まだ無ければ）用意する。
+  // 手書きが OFF で開いても、先生の下地や前回の手書きが見えるよう、
+  // モードに関係なく作る。下地の読み込みは生成時の1回だけにして、
+  // 手書きを ON/OFF し直しても児童の線が消えないようにする。
+  function ensureCanvas() {
+    if (State.fabricCanvas) return;
+    var cv = byId('drawCanvas');
+    var pp = byId('paperArea');
+    if (!cv) return;
+    cv.classList.remove('d-none');
+    cv.style.position = 'absolute';
+    cv.style.left = '0';
+    cv.style.top = '0';
+    if (pp) { cv.width = pp.offsetWidth; cv.height = pp.offsetHeight; }
+    try { State.fabricCanvas = new fabric.Canvas('drawCanvas', { isDrawingMode: State.isDrawMode }); } catch (e) { /* init error */ }
+    if (State.currentTask && State.currentTask.canvasData && State.fabricCanvas) {
+      try { State.fabricCanvas.loadFromJSON(State.currentTask.canvasData); } catch (e) { /* 無視 */ }
+    }
+  }
+
   function toggleDrawMode(forceState) {
     var newState = (forceState !== undefined) ? forceState : !State.isDrawMode;
     State.isDrawMode = newState;
 
     var btn = byId('btnDrawMode');
     var tools = byId('drawTools');
-    var cv = byId('drawCanvas');
-    var pp = byId('paperArea');
 
     if (btn) {
       btn.classList.replace(newState ? 'btn-outline-dark' : 'btn-dark', newState ? 'btn-dark' : 'btn-outline-dark');
     }
     if (tools) { if (newState) tools.classList.remove('d-none'); else tools.classList.add('d-none'); }
 
+    // キャンバスは手書き OFF でも用意する（下地・前回手書きの表示、自動保存のため）。
+    ensureCanvas();
+
+    // .canvas-container は fabric が canvas を包んで作る。
+    // ON なら手書き層が pointer を受け、OFF なら回答欄に pointer を通す。
+    var cnt = overlayEl ? overlayEl.querySelector('.canvas-container') : null;
     if (newState) {
-      if (cv) {
-        cv.classList.remove('d-none');
-        cv.style.position = 'absolute';
-        cv.style.left = '0';
-        cv.style.top = '0';
-        if (pp) { cv.width = pp.offsetWidth; cv.height = pp.offsetHeight; }
-      }
-      if (!State.fabricCanvas && cv) {
-        try { State.fabricCanvas = new fabric.Canvas('drawCanvas', { isDrawingMode: true }); } catch (e) { /* init error */ }
-      } else if (State.fabricCanvas) {
+      if (State.fabricCanvas) {
         State.fabricCanvas.isDrawingMode = true;
+        if (State.fabricCanvas.freeDrawingBrush) {
+          var penColorEl = byId('penColor');
+          State.fabricCanvas.freeDrawingBrush.width = 3;
+          State.fabricCanvas.freeDrawingBrush.color = penColorEl ? penColorEl.value : '#ff0000';
+        }
       }
-      if (State.fabricCanvas && State.fabricCanvas.freeDrawingBrush) {
-        var penColorEl = byId('penColor');
-        State.fabricCanvas.freeDrawingBrush.width = 3;
-        State.fabricCanvas.freeDrawingBrush.color = penColorEl ? penColorEl.value : '#ff0000';
-      }
-      var cntOn = overlayEl ? overlayEl.querySelector('.canvas-container') : null;
-      if (cntOn) cntOn.style.pointerEvents = 'auto';
-      if (State.currentTask && State.currentTask.canvasData && State.fabricCanvas) {
-        try { State.fabricCanvas.loadFromJSON(State.currentTask.canvasData); } catch (e) { /* 無視 */ }
-      }
+      if (cnt) cnt.style.pointerEvents = 'auto';
       byId('worksheetContent').contentEditable = false;
     } else {
       if (State.fabricCanvas) State.fabricCanvas.isDrawingMode = false;
-      var cnt = overlayEl ? overlayEl.querySelector('.canvas-container') : null;
       if (cnt) cnt.style.pointerEvents = 'none';
       byId('worksheetContent').contentEditable = (State.mode === 'teacher');
     }
@@ -871,7 +881,10 @@ var Worksheet = (function () {
 
       enableStudentInputs();
       setTimeout(function () {
-        toggleDrawMode(true);
+        // 「入力優先」で開く：手書きは OFF で始め、回答欄をすぐタップして
+        // 書き込めるようにする（キャンバスは用意されるので、下地・前回の
+        // 手書きは表示され、手書きボタンでいつでも ON にできる）。
+        toggleDrawMode(false);
         loadMyResponse().finally(function () { UI.hideLoading(); });
       }, 300);
     }).catch(function () {

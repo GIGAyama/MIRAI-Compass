@@ -109,6 +109,12 @@ async function selfTest() {
     ['E12_MASKABLE_SAFEZONE', (d) => cpSync(join(d, 'docs/icons/icon-192.png'), join(d, 'docs/icons/icon-maskable-192.png'))],
     ['F6_FILE_SIZE', (d) => patch(d, 'js_core.html', (s) => s + '\n' + '// 行数超過の確認用\n'.repeat(5200))],
     ['G1_GENERATED_MARKED', (d) => patch(d, 'vendor_css.html', (s) => s.replace('手で編集しない', ''))],
+    ['SEC_PRIVILEGED_FN_GUARDED', (d) => patch(d, 'code.gs', (s) => s.replace(
+      'MiraiAuth.requireTeacher();\n    var props = PropertiesService.getScriptProperties();',
+      'var props = PropertiesService.getScriptProperties();'))],
+    ['SEC_NO_PASSWORD_AUTH', (d) => patch(d, 'code.gs', (s) => s.replace(
+      'var MiraiAuth = (function () {',
+      'var TEACHER_PASS = ScriptProps.get("pw"); function verifyPassword(p) { return p === TEACHER_PASS; }\nvar MiraiAuth = (function () {'))],
   ];
 
   function patch(dir, file, fn) {
