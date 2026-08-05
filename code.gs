@@ -59,6 +59,31 @@ const DB_SCHEMA = {
   }
 };
 
+// === MIRAI SHARED (SERVER) 両アプリ共通・バイト単位で同一に保つこと =====================
+// 先生専用サーバー関数の本人確認。CacheService の共有キャッシュに短命トークンを置く。
+// デプロイ設定に依存しないため、本番で認可が原因で授業が止まることはない。
+var MiraiAuth = (function () {
+  var CACHE_PREFIX = 'mirai_tk_';
+  var TTL_SEC = 6 * 60 * 60; // 6時間
+  function _cache() { return CacheService.getScriptCache(); }
+  function issueToken() {
+    var t = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+    _cache().put(CACHE_PREFIX + t, '1', TTL_SEC);
+    return t;
+  }
+  function isValid(token) {
+    if (!token) return false;
+    return _cache().get(CACHE_PREFIX + String(token)) === '1';
+  }
+  function requireTeacher(token) {
+    if (!isValid(token)) {
+      throw new Error('AUTH_REQUIRED: 先生の認証が必要です。もう一度ログインしてください。');
+    }
+  }
+  function revoke(token) { if (token) _cache().remove(CACHE_PREFIX + String(token)); }
+  return { issueToken: issueToken, isValid: isValid, requireTeacher: requireTeacher, revoke: revoke };
+})();
+
 // ==========================================
 //  1. 基本機能 & HTML配信 (Core Functions)
 // ==========================================
@@ -110,25 +135,39 @@ function doPost(e) {
     }
 
     const json = JSON.parse(e.postData.contents);
-    
+
+    // 連携トークンの検証。一致しない外部POSTは一切書き込まない。
+    const expected = PROPERTIES.getProperty('INTEGRATION_TOKEN');
+    if (!expected || String(json.token) !== String(expected)) {
+      output.setContent(JSON.stringify({ success: false, error: 'AUTH' }));
+      return output;
+    }
+
     // 排他制御ロックを取得（最大10秒待機）
     const lock = LockService.getScriptLock();
+    let didWrite = false;
     if (lock.tryLock(10000)) {
       try {
         if (json.action === 'syncMode' || json.action === 'syncStatus') {
           updateLiveStatusFromPassport(json);
         }
+        didWrite = true;
       } finally {
         lock.releaseLock();
       }
     }
-    
-    output.setContent(JSON.stringify({ success: true }));
+
+    // ロックが取れず書き込めなかった場合は success:true を返さない。
+    if (didWrite) {
+      output.setContent(JSON.stringify({ success: true }));
+    } else {
+      output.setContent(JSON.stringify({ success: false, error: 'BUSY' }));
+    }
 
   } catch (err) {
     output.setContent(JSON.stringify({ success: false, error: err.message }));
   }
-  
+
   return output;
 }
 
@@ -160,26 +199,41 @@ function getAppInitialData() {
  * システム初期化実行
  * 新しいスプレッドシートを作成し、IDを保存します
  */
-function initSystem() {
+function initSystem(token) {
   try {
+    // 既にシステムが存在する場合の再初期化は、先生トークンがないと拒否する。
+    // 未セットアップ（初回）はトークン不要で通す。
+    if (PROPERTIES.getProperty('SS_ID') && !MiraiAuth.isValid(token)) {
+      throw new Error('AUTH_REQUIRED: 先生の認証が必要です。もう一度ログインしてください。');
+    }
+
     let ssId = PROPERTIES.getProperty('SS_ID');
     let ss;
+    let isFirstCreate = false;
     if (ssId) {
       ss = SpreadsheetApp.openById(ssId);
     } else {
       ss = SpreadsheetApp.create('みらいコンパス_データベース');
       ssId = ss.getId();
       PROPERTIES.setProperty('SS_ID', ssId);
+      isFirstCreate = true;
     }
-    
+
     // 全シートの存在確認と作成
     checkAndFixSheets(ss);
-    
+
     // デフォルトの「シート1」があれば削除
     const defaultSheet = ss.getSheetByName('シート1');
     if (defaultSheet) ss.deleteSheet(defaultSheet);
-    
-    PROPERTIES.setProperty('TEACHER_PASS', 'admin');
+
+    // 初回作成時のみ既定パスワードを設定する（再初期化で admin に戻さない）。
+    if (isFirstCreate) {
+      PROPERTIES.setProperty('TEACHER_PASS', 'admin');
+    }
+    // 連携トークン（Passport 等の外部書き込みの本人確認用）を未設定なら生成する。
+    if (!PROPERTIES.getProperty('INTEGRATION_TOKEN')) {
+      PROPERTIES.setProperty('INTEGRATION_TOKEN', (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, ''));
+    }
     return createSuccessResponse({ message: 'システムを初期化しました。初期パスワードは admin です。' });
   } catch (e) {
     return createErrorResponse(e);
@@ -189,14 +243,19 @@ function initSystem() {
 function verifyPassword(inputPass) {
   try {
     const currentPass = String(PROPERTIES.getProperty('TEACHER_PASS') || 'admin');
-    return createSuccessResponse({ authenticated: (String(inputPass) === currentPass) });
+    if (String(inputPass) === currentPass) {
+      // 認証成功時のみ、短命の先生トークンを発行して返す。
+      return createSuccessResponse({ authenticated: true, token: MiraiAuth.issueToken() });
+    }
+    return createSuccessResponse({ authenticated: false });
   } catch (e) {
     return createErrorResponse(e);
   }
 }
 
-function changeTeacherPassword(newPass) {
+function changeTeacherPassword(token, newPass) {
   try {
+    MiraiAuth.requireTeacher(token);
     if (!newPass) throw new Error("パスワードが空です");
     PROPERTIES.setProperty('TEACHER_PASS', String(newPass));
     return createSuccessResponse();
@@ -539,10 +598,11 @@ function updateLiveStatusFromPassport(data) {
 
 // --- 先生用管理機能（ロック推奨） ---
 
-function updateUnitTask(taskId, updateData) {
+function updateUnitTask(token, taskId, updateData) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
+      MiraiAuth.requireTeacher(token);
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
       const data = sheet.getDataRange().getValues();
@@ -574,10 +634,11 @@ function updateUnitTask(taskId, updateData) {
   }
 }
 
-function addUnitTask(unitId, taskData) {
+function addUnitTask(token, unitId, taskData) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
+      MiraiAuth.requireTeacher(token);
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
       // 単元の基本情報を取得するために検索
@@ -602,10 +663,11 @@ function addUnitTask(unitId, taskData) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function deleteUnitTask(taskId) {
+function deleteUnitTask(token, taskId) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
+      MiraiAuth.requireTeacher(token);
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
       const data = sheet.getDataRange().getValues();
@@ -623,80 +685,93 @@ function deleteUnitTask(taskId) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function createNewUnit(unitInfo) {
-  try {
-    const ss = getSpreadsheet();
-    const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
-    
-    const unitId = "U" + Utilities.formatDate(new Date(), "JST", "yyyyMMddHHmmss");
-    const taskId = "T" + Utilities.getUuid().substring(0, 8);
-    
-    const infoObj = {
-      title: unitInfo.title, subject: unitInfo.subject,
-      grade: unitInfo.grade, totalHours: Number(unitInfo.totalHours)
-    };
-    
-    // 最初のタスク（導入）を自動作成
-    const newRow = [
-      unitId, taskId, 'must', '【導入】' + unitInfo.title, 
-      '単元の目標や計画を確認しよう', 15, '', '導入', 'Step 1', 
-      '', '', '', '', 'teacher', JSON.stringify(infoObj), infoObj.totalHours 
-    ];
-    sheet.appendRow(newRow);
-    return createSuccessResponse({ message: '新しい単元を作成しました', unitId: unitId });
-  } catch (e) { return createErrorResponse(e); }
+function createNewUnit(token, unitInfo) {
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(5000)) {
+    try {
+      MiraiAuth.requireTeacher(token);
+      const ss = getSpreadsheet();
+      const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
+
+      const unitId = "U" + Utilities.formatDate(new Date(), "JST", "yyyyMMddHHmmss");
+      const taskId = "T" + Utilities.getUuid().substring(0, 8);
+
+      const infoObj = {
+        title: unitInfo.title, subject: unitInfo.subject,
+        grade: unitInfo.grade, totalHours: Number(unitInfo.totalHours)
+      };
+
+      // 最初のタスク（導入）を自動作成
+      const newRow = [
+        unitId, taskId, 'must', '【導入】' + unitInfo.title,
+        '単元の目標や計画を確認しよう', 15, '', '導入', 'Step 1',
+        '', '', '', '', 'teacher', JSON.stringify(infoObj), infoObj.totalHours
+      ];
+      sheet.appendRow(newRow);
+      return createSuccessResponse({ message: '新しい単元を作成しました', unitId: unitId });
+    } catch (e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
+  } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function updateUnitBasicInfo(unitId, infoData) {
-  try {
-    const ss = getSpreadsheet();
-    const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
-    const data = sheet.getDataRange().getValues();
-    
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(unitId)) {
-        let currentInfo = safeJsonParse(data[i][14]);
-        if (infoData.title !== undefined) currentInfo.title = infoData.title;
-        if (infoData.subject !== undefined) currentInfo.subject = infoData.subject;
-        if (infoData.grade !== undefined) currentInfo.grade = infoData.grade;
-        if (infoData.goal !== undefined) currentInfo.goal = infoData.goal;
-        if (infoData.description !== undefined) currentInfo.description = infoData.description;
-        
-        sheet.getRange(i + 1, 15).setValue(JSON.stringify(currentInfo));
-        if (infoData.title !== undefined) sheet.getRange(i + 1, 4).setValue(infoData.title);
-      }
-    }
-    return createSuccessResponse({ message: '単元情報を更新しました' });
-  } catch (e) { return createErrorResponse(e); }
-}
+function updateUnitBasicInfo(token, unitId, infoData) {
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(5000)) {
+    try {
+      MiraiAuth.requireTeacher(token);
+      const ss = getSpreadsheet();
+      const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
+      const data = sheet.getDataRange().getValues();
 
-function updateUnitTotalHours(unitId, newTotalHours) {
-  try {
-    const ss = getSpreadsheet();
-    const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
-    const data = sheet.getDataRange().getValues();
-    
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(unitId)) { 
-        sheet.getRange(i + 1, 16).setValue(newTotalHours);
-        let info = safeJsonParse(data[i][14]);
-        if (info) {
-          info.totalHours = newTotalHours;
-          sheet.getRange(i + 1, 15).setValue(JSON.stringify(info));
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0]) === String(unitId)) {
+          let currentInfo = safeJsonParse(data[i][14]);
+          if (infoData.title !== undefined) currentInfo.title = infoData.title;
+          if (infoData.subject !== undefined) currentInfo.subject = infoData.subject;
+          if (infoData.grade !== undefined) currentInfo.grade = infoData.grade;
+          if (infoData.goal !== undefined) currentInfo.goal = infoData.goal;
+          if (infoData.description !== undefined) currentInfo.description = infoData.description;
+
+          sheet.getRange(i + 1, 15).setValue(JSON.stringify(currentInfo));
+          if (infoData.title !== undefined) sheet.getRange(i + 1, 4).setValue(infoData.title);
         }
       }
-    }
-    return createSuccessResponse({ message: '時数を更新しました' });
-  } catch (e) { return createErrorResponse(e); }
+      return createSuccessResponse({ message: '単元情報を更新しました' });
+    } catch (e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
+  } else { return createErrorResponse(new Error("Timeout")); }
+}
+
+function updateUnitTotalHours(token, unitId, newTotalHours) {
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(5000)) {
+    try {
+      MiraiAuth.requireTeacher(token);
+      const ss = getSpreadsheet();
+      const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
+      const data = sheet.getDataRange().getValues();
+
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][0]) === String(unitId)) {
+          sheet.getRange(i + 1, 16).setValue(newTotalHours);
+          let info = safeJsonParse(data[i][14]);
+          if (info) {
+            info.totalHours = newTotalHours;
+            sheet.getRange(i + 1, 15).setValue(JSON.stringify(info));
+          }
+        }
+      }
+      return createSuccessResponse({ message: '時数を更新しました' });
+    } catch (e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
+  } else { return createErrorResponse(new Error("Timeout")); }
 }
 
 
 // [改修] 名簿保存処理をオブジェクト配列対応に変更
 
-function saveClassRoster(classId, studentList) {
+function saveClassRoster(token, classId, studentList) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(10000)) {
     try {
+      MiraiAuth.requireTeacher(token);
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.StudentRoster.name);
       const data = sheet.getDataRange().getValues();
@@ -723,44 +798,55 @@ function saveClassRoster(classId, studentList) {
   } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function saveSeatCoordinates(coordinates) {
-  try {
-    const ss = getSpreadsheet();
-    const sheet = ss.getSheetByName(DB_SCHEMA.LiveStatus.name);
-    const data = sheet.getDataRange().getValues();
-    const nameToRow = new Map();
-    for (let i = 1; i < data.length; i++) { nameToRow.set(data[i][1], i + 1); }
-    
-    coordinates.forEach(c => {
-      const rIdx = nameToRow.get(c.name);
-      if (rIdx) { sheet.getRange(rIdx, 9, 1, 2).setValues([[c.x, c.y]]); }
-    });
-    return createSuccessResponse();
-  } catch(e) { return createErrorResponse(e); }
+function saveSeatCoordinates(token, coordinates) {
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(5000)) {
+    try {
+      MiraiAuth.requireTeacher(token);
+      const ss = getSpreadsheet();
+      const sheet = ss.getSheetByName(DB_SCHEMA.LiveStatus.name);
+      const data = sheet.getDataRange().getValues();
+      const nameToRow = new Map();
+      for (let i = 1; i < data.length; i++) { nameToRow.set(data[i][1], i + 1); }
+
+      coordinates.forEach(c => {
+        const rIdx = nameToRow.get(c.name);
+        if (rIdx) { sheet.getRange(rIdx, 9, 1, 2).setValues([[c.x, c.y]]); }
+      });
+      return createSuccessResponse();
+    } catch(e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
+  } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function saveClassSchedule(scheduleData) {
-  try {
-    const ss = getSpreadsheet();
-    const sheet = ss.getSheetByName(DB_SCHEMA.ClassSchedule.name);
-    sheet.appendRow([
-      Utilities.getUuid(), scheduleData.classId, scheduleData.date, 
-      scheduleData.startTime, scheduleData.endTime, 
-      scheduleData.unitId, scheduleData.hour, scheduleData.message, new Date()
-    ]);
-    return createSuccessResponse();
-  } catch(e) { return createErrorResponse(e); }
+function saveClassSchedule(token, scheduleData) {
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(5000)) {
+    try {
+      MiraiAuth.requireTeacher(token);
+      const ss = getSpreadsheet();
+      const sheet = ss.getSheetByName(DB_SCHEMA.ClassSchedule.name);
+      sheet.appendRow([
+        Utilities.getUuid(), scheduleData.classId, scheduleData.date,
+        scheduleData.startTime, scheduleData.endTime,
+        scheduleData.unitId, scheduleData.hour, scheduleData.message, new Date()
+      ]);
+      return createSuccessResponse();
+    } catch(e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
+  } else { return createErrorResponse(new Error("Timeout")); }
 }
 
 // --- 生徒のアクション保存（課題追加、計画、振り返り） ---
 
 function addMyTask(studentName, title, desc, time, unitId, classId) {
-  try {
-    const ss = getSpreadsheet();
-    const taskId = "MT" + Utilities.getUuid().substring(0, 8);
-    ss.getSheetByName(DB_SCHEMA.MyTasks.name).appendRow([taskId, studentName, title, desc, time, new Date(), unitId || "", classId || ""]);
-    return createSuccessResponse({ taskId: taskId });
-  } catch (e) { return createErrorResponse(e); }
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(5000)) {
+    try {
+      const ss = getSpreadsheet();
+      const taskId = "MT" + Utilities.getUuid().substring(0, 8);
+      ss.getSheetByName(DB_SCHEMA.MyTasks.name).appendRow([taskId, studentName, title, desc, time, new Date(), unitId || "", classId || ""]);
+      return createSuccessResponse({ taskId: taskId });
+    } catch (e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
+  } else { return createErrorResponse(new Error("Timeout")); }
 }
 
 function saveStudentPlan(studentName, unitId, planData, classId) {
@@ -818,61 +904,73 @@ function saveDailyReflection(studentName, unitId, hour, achievement, comment, cl
 }
 
 function savePortfolio(studentName, unitId, summary, classId) {
-  try {
-    const ss = getSpreadsheet();
-    const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
-    const data = sheet.getDataRange().getValues();
-    const now = new Date();
-    
-    let rowIndex = -1;
-    for(let i = 1; i < data.length; i++) {
-      if(data[i][0] === studentName && String(data[i][1]) === String(unitId)) { rowIndex = i + 1; break; }
-    }
-    
-    if(rowIndex > 0) {
-      sheet.getRange(rowIndex, 3, 1, 2).setValues([[summary, now]]);
-      if(classId) sheet.getRange(rowIndex, 5).setValue(classId);
-    } else {
-      sheet.appendRow([studentName, unitId, summary, now, classId || ""]);
-    }
-    return createSuccessResponse();
-  } catch(e) { return createErrorResponse(e); }
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(5000)) {
+    try {
+      const ss = getSpreadsheet();
+      const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
+      const data = sheet.getDataRange().getValues();
+      const now = new Date();
+
+      let rowIndex = -1;
+      for(let i = 1; i < data.length; i++) {
+        if(data[i][0] === studentName && String(data[i][1]) === String(unitId)) { rowIndex = i + 1; break; }
+      }
+
+      if(rowIndex > 0) {
+        sheet.getRange(rowIndex, 3, 1, 2).setValues([[summary, now]]);
+        if(classId) sheet.getRange(rowIndex, 5).setValue(classId);
+      } else {
+        sheet.appendRow([studentName, unitId, summary, now, classId || ""]);
+      }
+      return createSuccessResponse();
+    } catch(e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
+  } else { return createErrorResponse(new Error("Timeout")); }
 }
 
 // --- フィードバック・評価 ---
 
-function sendFeedback(studentName, taskId, stamp, classId) {
-  try {
-    const ss = getSpreadsheet();
-    ss.getSheetByName(DB_SCHEMA.Feedback.name).appendRow([Utilities.getUuid(), studentName, taskId, stamp, new Date(), classId || ""]);
-    return createSuccessResponse();
-  } catch (e) { return createErrorResponse(e); }
+function sendFeedback(token, studentName, taskId, stamp, classId) {
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(5000)) {
+    try {
+      MiraiAuth.requireTeacher(token);
+      const ss = getSpreadsheet();
+      ss.getSheetByName(DB_SCHEMA.Feedback.name).appendRow([Utilities.getUuid(), studentName, taskId, stamp, new Date(), classId || ""]);
+      return createSuccessResponse();
+    } catch (e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
+  } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function savePortfolioFeedback(studentName, unitId, feedback, stamp) {
-  try {
-    const ss = getSpreadsheet();
-    const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
-    const data = sheet.getDataRange().getValues();
-    let rowIndex = -1;
-    for(let i = 1; i < data.length; i++) {
-      if(data[i][0] === studentName && String(data[i][1]) === String(unitId)) { rowIndex = i + 1; break; }
-    }
-    
-    if(rowIndex > 0) {
-      sheet.getRange(rowIndex, 6, 1, 2).setValues([[feedback, stamp]]);
-    } else {
-      const now = new Date();
-      sheet.appendRow([studentName, unitId, "", now, "", feedback, stamp]);
-    }
-    return createSuccessResponse();
-  } catch(e) { return createErrorResponse(e); }
+function savePortfolioFeedback(token, studentName, unitId, feedback, stamp) {
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(5000)) {
+    try {
+      MiraiAuth.requireTeacher(token);
+      const ss = getSpreadsheet();
+      const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
+      const data = sheet.getDataRange().getValues();
+      let rowIndex = -1;
+      for(let i = 1; i < data.length; i++) {
+        if(data[i][0] === studentName && String(data[i][1]) === String(unitId)) { rowIndex = i + 1; break; }
+      }
+
+      if(rowIndex > 0) {
+        sheet.getRange(rowIndex, 6, 1, 2).setValues([[feedback, stamp]]);
+      } else {
+        const now = new Date();
+        sheet.appendRow([studentName, unitId, "", now, "", feedback, stamp]);
+      }
+      return createSuccessResponse();
+    } catch(e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
+  } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function saveAllPortfolios(feedbackList) {
+function saveAllPortfolios(token, feedbackList) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(10000)) {
     try {
+      MiraiAuth.requireTeacher(token);
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.Portfolios.name);
       const data = sheet.getDataRange().getValues();
@@ -913,39 +1011,49 @@ function saveAllPortfolios(feedbackList) {
 
 // JSONインポート、アーカイブ、Passport連携など
 
-function importUnitJson(jsonStr) {
-  try {
-    const ssId = PROPERTIES.getProperty('SS_ID');
-    if (!ssId) throw new Error('初期設定未完了');
-    const ss = SpreadsheetApp.openById(ssId);
-    checkAndFixSheets(ss);
-    
-    const data = JSON.parse(jsonStr);
-    if (!data.unitInfo) data.unitInfo = {};
-    if (!data.unitInfo.title && data.unitInfo.unitName) data.unitInfo.title = data.unitInfo.unitName;
-    if (data.unitInfo.grade && typeof data.unitInfo.grade !== 'string') data.unitInfo.grade = String(data.unitInfo.grade);
-    if (!data.unitInfo.title) data.unitInfo.title = "無題の単元";
+function importUnitJson(token, jsonStr) {
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(10000)) {
+    try {
+      MiraiAuth.requireTeacher(token);
+      const ssId = PROPERTIES.getProperty('SS_ID');
+      if (!ssId) throw new Error('初期設定未完了');
+      const ss = SpreadsheetApp.openById(ssId);
+      checkAndFixSheets(ss);
 
-    const uid = "U" + Utilities.formatDate(new Date(), "JST", "yyyyMMddHHmm");
-    const uInfoStr = JSON.stringify(data.unitInfo || {});
-    const totalHours = data.unitInfo?.totalHours || 8;
-    
-    const rows = data.tasks.map(t => [
-      uid, t.id || '', t.type || 'must', t.title || '無題', t.description || '', t.estimatedTime || 10, '', 
-      t.category || 'まなぶ', t.step || '', t.textbook || '', t.tablet || '', t.print || '',
-      (t.prerequisites || []).join(','), t.format || 'student', uInfoStr, totalHours
-    ]);
-    
-    if (rows.length > 0) {
-      const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
-      sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
-    }
-    return createSuccessResponse({ count: rows.length });
-  } catch (e) { return createErrorResponse(e); }
+      const data = JSON.parse(jsonStr);
+      if (!data.unitInfo) data.unitInfo = {};
+      if (!data.unitInfo.title && data.unitInfo.unitName) data.unitInfo.title = data.unitInfo.unitName;
+      if (data.unitInfo.grade && typeof data.unitInfo.grade !== 'string') data.unitInfo.grade = String(data.unitInfo.grade);
+      if (!data.unitInfo.title) data.unitInfo.title = "無題の単元";
+
+      // 単元IDは createNewUnit と同じ14桁（yyyyMMddHHmmss）に、衝突防止のランダム接尾辞を足す。
+      // 分単位（yyyyMMddHHmm）だと同一分内の連続インポートでIDが衝突し、無関係なタスクが混ざる不具合があった。
+      const rand = Utilities.getUuid().replace(/-/g, '').substring(0, 6);
+      const uid = "U" + Utilities.formatDate(new Date(), "JST", "yyyyMMddHHmmss") + rand;
+      const uInfoStr = JSON.stringify(data.unitInfo || {});
+      const totalHours = data.unitInfo?.totalHours || 8;
+
+      const rows = data.tasks.map(t => [
+        uid, t.id || '', t.type || 'must', t.title || '無題', t.description || '', t.estimatedTime || 10, '',
+        t.category || 'まなぶ', t.step || '', t.textbook || '', t.tablet || '', t.print || '',
+        (t.prerequisites || []).join(','), t.format || 'student', uInfoStr, totalHours
+      ]);
+
+      if (rows.length > 0) {
+        const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
+        sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+      }
+      return createSuccessResponse({ count: rows.length });
+    } catch (e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
+  } else { return createErrorResponse(new Error("Timeout")); }
 }
 
-function archiveUnitData(unitId, unitTitle) {
+function archiveUnitData(token, unitId, unitTitle) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) { return createErrorResponse(new Error("Timeout")); }
   try {
+    MiraiAuth.requireTeacher(token);
     const ss = getSpreadsheet();
     const archiveName = `アーカイブ_${unitTitle || unitId}_${Utilities.formatDate(new Date(), 'JST', 'yyyyMMdd')}`;
     const archiveSs = SpreadsheetApp.create(archiveName);
@@ -1003,11 +1111,11 @@ function archiveUnitData(unitId, unitTitle) {
     const delSheet = archiveSs.getSheetByName('シート1');
     if(delSheet) archiveSs.deleteSheet(delSheet);
 
-    return createSuccessResponse({ 
+    return createSuccessResponse({
       message: `アーカイブ完了: ${movedCount}件のデータを移動しました。\nファイル名: ${archiveName}`,
       url: archiveSs.getUrl()
     });
-  } catch(e) { return createErrorResponse(e); }
+  } catch(e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
 }
 
 // --- みらいパスポート連携 & AIプロンプト ---
@@ -1019,8 +1127,9 @@ function getCustomAiPrompt() {
   } catch (e) { return createErrorResponse(e); }
 }
 
-function saveCustomAiPrompt(text) {
+function saveCustomAiPrompt(token, text) {
   try {
+    MiraiAuth.requireTeacher(token);
     PROPERTIES.setProperty('CUSTOM_AI_PROMPT', text);
     return createSuccessResponse();
   } catch (e) { return createErrorResponse(e); }
@@ -1029,10 +1138,21 @@ function saveCustomAiPrompt(text) {
 function getPassportDbId() { return PROPERTIES.getProperty('PASSPORT_DB_ID') || ""; }
 function getPassportUrl() { return PROPERTIES.getProperty('PASSPORT_WEB_APP_URL') || ""; }
 
-function savePassportConfig(dbId, url) {
-  PROPERTIES.setProperty('PASSPORT_DB_ID', dbId);
-  PROPERTIES.setProperty('PASSPORT_WEB_APP_URL', url);
-  return true;
+// 先生だけが読める連携トークン。パスポート側の設定に転記するために使う。
+function getIntegrationToken(token) {
+  try {
+    MiraiAuth.requireTeacher(token);
+    return createSuccessResponse({ integrationToken: PROPERTIES.getProperty('INTEGRATION_TOKEN') || "" });
+  } catch (e) { return createErrorResponse(e); }
+}
+
+function savePassportConfig(token, dbId, url) {
+  try {
+    MiraiAuth.requireTeacher(token);
+    PROPERTIES.setProperty('PASSPORT_DB_ID', dbId);
+    PROPERTIES.setProperty('PASSPORT_WEB_APP_URL', url);
+    return createSuccessResponse();
+  } catch (e) { return createErrorResponse(e); }
 }
 
 function sendUnitPlanToPassport_DirectDB(unitId) {
