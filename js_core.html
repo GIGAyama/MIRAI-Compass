@@ -123,7 +123,7 @@ let appState = {
     classId: ""    // ログイン中のクラス
   },
   view: {
-    student: 'daily',   // 生徒の表示 ('daily':今日の課題, 'planning':計画)
+    student: 'daily',   // 生徒の表示 ('daily':今日の課題, 'planning':計画, 'portfolio':ポートフォリオ, 'plaza':ひろば)
     teacher: 'cards',   // 先生の表示 ('cards':一覧, 'heatmap':進捗, 'seating':座席, 'summaries':まとめ, 'design':設計)
     teacherClassId: 'All' // 先生が見ているクラスフィルター
   },
@@ -455,6 +455,7 @@ function renderApp() {
 
     if (appState.mode === 'teacher') {
       // 先生モード
+      if (typeof removeStudentBottomNav === 'function') removeStudentBottomNav(); // 児童タブバーを消す
       mainEl.classList.add('teacher-mode'); // 横幅制限を解除
       settingsBtn.classList.remove('d-none'); // 設定ボタン表示
       exitBtn.classList.remove('d-none');     // 終了ボタン表示

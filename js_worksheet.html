@@ -1315,12 +1315,158 @@ var Worksheet = (function () {
 
 
   /* ==========================================================
-   *  11. 公開 API
+   *  11. ひろば（ピア閲覧）— 読み取り専用
+   *      友だちの提出物を、入力も提出もできない形で見せる。
+   *      手書きは操作できない fabric キャンバスに描くだけ。
+   * ========================================================== */
+
+  // 児童：友だちのワークシートを読み取り専用で開く。
+  // response: { responseId, taskId, studentName, canvasImage, canvasJson, reactions }
+  function openPeer(response) {
+    if (!response || !response.taskId) {
+      if (typeof handleError === 'function') handleError({ message: '作品が見つかりません' });
+      return;
+    }
+    close();
+    State.mode = 'peer';
+    State.currentTask = { id: response.taskId, title: response.studentName || '', canvasData: response.canvasJson || null };
+    State.unitData = { unitInfo: resolveUnitInfo() };
+
+    buildOverlay();
+    byId('ws-topbar-title').textContent = (response.studentName || 'おともだち') + ' さんのワークシート';
+    // 手書き・画像・提出などの操作ツールは出さない（読み取り専用）
+    byId('editorToolbar').classList.add('d-none');
+    buildPeerReactionBar(response);
+
+    UI.showLoading();
+    Server.call('loadWorksheetFromDB', response.taskId).then(function (data) {
+      var ws = byId('worksheetContent');
+      if (!data || !data.htmlContent) {
+        ws.innerHTML = '<div class="d-flex flex-column align-items-center justify-content-center text-muted py-5" style="min-height:200mm;">'
+          + '<i class="bi bi-hourglass-split fs-1 mb-3" aria-hidden="true"></i>'
+          + '<p class="fs-5">ワークシートが見つかりませんでした</p></div>';
+        UI.hideLoading();
+        return;
+      }
+      ws.innerHTML = data.htmlContent;
+      activateWorksheetScripts(ws);
+      // 完全に読み取り専用にする：編集不可・入力欄は無効・ポインタも殺す
+      ws.contentEditable = 'false';
+      ws.querySelectorAll('[contenteditable]').forEach(function (el) { el.contentEditable = 'false'; });
+      ws.style.pointerEvents = 'none';
+      setTimeout(function () {
+        renderPeerCanvas(response.canvasJson);
+        UI.hideLoading();
+      }, 300);
+    }).catch(function () {
+      byId('worksheetContent').innerHTML = '<div class="text-center text-danger py-5">読み込みに失敗しました</div>';
+      UI.hideLoading();
+    });
+  }
+
+  // 友だちの手書きを、操作できない fabric キャンバスに描く（下敷き表示のみ）。
+  function renderPeerCanvas(canvasJson) {
+    if (typeof fabric === 'undefined') return;
+    var cv = byId('drawCanvas');
+    var pp = byId('paperArea');
+    if (!cv) return;
+    cv.classList.remove('d-none');
+    cv.style.position = 'absolute';
+    cv.style.left = '0';
+    cv.style.top = '0';
+    if (pp) { cv.width = pp.offsetWidth; cv.height = pp.offsetHeight; }
+    var canvas;
+    try {
+      canvas = new fabric.Canvas('drawCanvas', { isDrawingMode: false, selection: false, skipTargetFind: true });
+    } catch (e) { return; }
+    if (canvasJson) {
+      try {
+        canvas.loadFromJSON(canvasJson, function () {
+          canvas.forEachObject(function (o) { o.selectable = false; o.evented = false; });
+          canvas.renderAll();
+        });
+      } catch (e) { /* 復元失敗は無視 */ }
+    }
+    // キャンバス層はイベントを受けない（本文もろとも読み取り専用）
+    var cnt = overlayEl ? overlayEl.querySelector('.canvas-container') : null;
+    if (cnt) cnt.style.pointerEvents = 'none';
+    State.peerCanvas = canvas;
+  }
+
+  // リアクションバー（スタンプ 👍💮👀✨ ＋ 短いコメント）。
+  function buildPeerReactionBar(response) {
+    var bar = byId('ws-bottombar');
+    var stamps = ['👍', '💮', '👀', '✨'];
+    var btns = stamps.map(function (s) {
+      return '<button type="button" class="btn btn-outline-primary rounded-circle ws-reaction-stamp" data-stamp="' + UI.esc(s) + '" '
+        + 'style="width:44px;height:44px;font-size:1.3rem;line-height:1;padding:0;" aria-label="スタンプ ' + UI.esc(s) + '">' + s + '</button>';
+    }).join('');
+    bar.innerHTML =
+      '<div class="d-flex gap-2 align-items-center flex-wrap w-100">'
+      + '  <div class="d-flex gap-1 me-2">' + btns + '</div>'
+      + '  <input type="text" id="ws-peer-comment" class="form-control form-control-sm" maxlength="40" '
+      + '         placeholder="ひとことコメント（40文字まで）" style="flex:1 1 160px;min-width:120px;max-width:280px;">'
+      + '  <button type="button" id="ws-peer-comment-send" class="btn btn-primary rounded-pill btn-sm px-3"><i class="bi bi-send-fill" aria-hidden="true"></i> おくる</button>'
+      + '  <span id="ws-peer-reactions" class="ms-auto small text-muted d-flex flex-wrap align-items-center gap-1"></span>'
+      + '</div>';
+    bar.querySelectorAll('.ws-reaction-stamp').forEach(function (b) {
+      b.addEventListener('click', function () { sendPeerReaction(response, 'stamp', b.getAttribute('data-stamp')); });
+    });
+    byId('ws-peer-comment-send').addEventListener('click', function () {
+      var el = byId('ws-peer-comment');
+      var val = (el.value || '').trim().slice(0, 40);
+      if (!val) return;
+      sendPeerReaction(response, 'comment', val);
+      el.value = '';
+    });
+    renderPeerReactionSummary(response.reactions);
+  }
+
+  // リアクションを送る（child→child）。fromName は表示名のみ。studentId は送らない。
+  function sendPeerReaction(response, type, value) {
+    var fromName = (typeof appState !== 'undefined' && appState.user && appState.user.name) ? appState.user.name : 'おともだち';
+    var reaction = { type: type, value: String(value).slice(0, 40), fromName: String(fromName).slice(0, 20) };
+    UI.showLoading();
+    // サーバーは targetResponseId を見る。仕様の responseId / taskId も併せて送る。
+    Server.call('savePeerReaction', {
+      responseId: response.responseId,
+      targetResponseId: response.responseId,
+      taskId: response.taskId,
+      reaction: reaction
+    }).then(function (res) {
+      if (res && res.reactions) response.reactions = res.reactions;
+      else response.reactions = (response.reactions || []).concat([reaction]);
+      renderPeerReactionSummary(response.reactions);
+      UI.toast('おくりました！');
+    }).catch(function () {
+      Swal.fire('エラー', 'おくれませんでした。もう一度ためしてね。', 'error');
+    }).finally(function () { UI.hideLoading(); });
+  }
+
+  // 届いているリアクションを安全に（エスケープ・短く）表示する。
+  function renderPeerReactionSummary(reactions) {
+    var el = byId('ws-peer-reactions');
+    if (!el) return;
+    var arr = Array.isArray(reactions) ? reactions : [];
+    if (!arr.length) { el.innerHTML = ''; return; }
+    el.innerHTML = arr.slice(-12).map(function (r) {
+      if (!r) return '';
+      if (r.type === 'stamp') return '<span class="fs-6">' + UI.esc(String(r.value || '').slice(0, 4)) + '</span>';
+      var who = UI.esc(String(r.fromName || '').slice(0, 20));
+      var txt = UI.esc(String(r.value || '').slice(0, 40));
+      return '<span class="badge bg-light text-dark border">' + who + '：' + txt + '</span>';
+    }).join('');
+  }
+
+
+  /* ==========================================================
+   *  12. 公開 API
    * ========================================================== */
   return {
     openStudent: openStudent,
     openTeacherEditor: openTeacherEditor,
     openGrading: openGrading,
+    openPeer: openPeer,
     close: close
   };
 })();

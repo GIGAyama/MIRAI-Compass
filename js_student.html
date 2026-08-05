@@ -18,6 +18,7 @@
  * [画面描画] 名前入力（ログイン）画面を表示
  */
 function renderNameEntry() {
+  if (typeof removeStudentBottomNav === 'function') removeStudentBottomNav(); // ログイン前はタブバーを出さない
   let classOptions = '';
   // クラスリストがあれば選択肢を作成
   if (dataStore.classList.length > 0) {
@@ -168,20 +169,85 @@ function loginStudent(isAuto) {
  * [機能] 生徒画面の描画振り分け
  * 「今日の学習(daily)」か「計画作成(planning)」かを判断して描画します。
  */
-function renderStudentView() { 
-  if (appState.view.student === 'planning') {
-    renderStudentPlanning(); 
+function renderStudentView() {
+  const view = appState.view.student;
+  if (view === 'planning') {
+    renderStudentPlanning();
+  } else if (view === 'portfolio') {
+    renderStudentPortfolio();
+  } else if (view === 'plaza') {
+    renderStudentPlaza();
   } else {
-    renderStudentDaily(); 
+    renderStudentDaily();
   }
+  // 児童タブバーを（無ければ）用意して、今のタブを目立たせる
+  renderStudentBottomNav();
 }
 
 /**
- * [画面描画] モード切替（計画 ⇔ 今日）
+ * [画面描画] モード切替（きょう / けいかく / ポートフォリオ / ひろば）
  */
-function setStudentViewMode(mode) { 
-  appState.view.student = mode; 
-  renderStudentView(); 
+function setStudentViewMode(mode) {
+  appState.view.student = mode;
+  // 内側スクロールを持つビュー（計画）から戻るときに位置が残らないよう先頭へ
+  const main = document.querySelector('main.container');
+  if (main) main.scrollTop = 0;
+  renderStudentView();
+}
+
+// ==========================================
+//  下部4タブナビ (child-friendly bottom nav)
+// ==========================================
+
+// タブ定義（アイコン + ふりがな寄りのラベル）
+const STUDENT_NAV_TABS = [
+  { id: 'daily',     icon: 'bi-house-door-fill', label: 'きょう' },
+  { id: 'planning',  icon: 'bi-calendar-range',  label: 'けいかく' },
+  { id: 'portfolio', icon: 'bi-journal-text',    label: 'ポートフォリオ' },
+  { id: 'plaza',     icon: 'bi-people-fill',     label: 'ひろば' }
+];
+
+/**
+ * [画面描画] 児童用の下部タブバーを用意し、現在のタブを反映する。
+ * body へ1度だけ差し込み、以降はタブの選択状態だけ更新する（冪等）。
+ * 実ボタン(<button>)なのでキーボード（Tab→Enter/Space）で操作できる。
+ */
+function renderStudentBottomNav() {
+  // 児童モードでログイン済みのときだけ表示する
+  if (appState.mode !== 'student' || !appState.user.name) { removeStudentBottomNav(); return; }
+  document.body.classList.add('has-student-nav');
+
+  let nav = document.getElementById('student-bottom-nav');
+  if (!nav) {
+    nav = document.createElement('nav');
+    nav.id = 'student-bottom-nav';
+    nav.className = 'student-bottom-nav no-print';
+    nav.setAttribute('role', 'navigation');
+    nav.setAttribute('aria-label', 'メインメニュー');
+    nav.innerHTML = STUDENT_NAV_TABS.map(function (tab) {
+      return `<button type="button" class="snav-btn" data-view="${escapeHtml(tab.id)}" onclick="setStudentViewMode('${escJs(tab.id)}')">
+                <i class="bi ${escapeHtml(tab.icon)}" aria-hidden="true"></i>
+                <span class="snav-label">${escapeHtml(tab.label)}</span>
+              </button>`;
+    }).join('');
+    document.body.appendChild(nav);
+  }
+  // 現在のタブを目立たせる（aria-current で支援技術にも伝える）
+  const current = appState.view.student;
+  nav.querySelectorAll('.snav-btn').forEach(function (btn) {
+    if (btn.getAttribute('data-view') === current) {
+      btn.setAttribute('aria-current', 'page');
+    } else {
+      btn.removeAttribute('aria-current');
+    }
+  });
+}
+
+/** [画面描画] 児童用タブバーを取り除く（先生モード・未ログイン時） */
+function removeStudentBottomNav() {
+  const nav = document.getElementById('student-bottom-nav');
+  if (nav && nav.parentNode) nav.parentNode.removeChild(nav);
+  document.body.classList.remove('has-student-nav');
 }
 
 /**
@@ -292,8 +358,6 @@ function renderStudentDaily() {
             <i class="bi bi-grid-3x3-gap-fill"></i> みんな
           </button>
           
-          <button class="btn btn-outline-primary btn-sm rounded-pill" onclick="setStudentViewMode('planning')"><i class="bi bi-calendar-range"></i> <ruby>計画<rt>けいかく</rt></ruby></button>
-          <button class="btn btn-outline-secondary btn-sm rounded-pill" onclick="renderPortfolioModal('${escJs(appState.user.name)}')" aria-label="ポートフォリオをひらく"><i class="bi bi-journal-text" aria-hidden="true"></i></button>
           <button class="btn btn-outline-success btn-sm rounded-pill" onclick="openDailyReflectionModal()"><i class="bi bi-pencil-square"></i> ふりかえり</button>
         </div>
       </div>
@@ -955,55 +1019,16 @@ function renderPortfolioModal(name, isTeacher = false) {
   const feedback = pfData.feedback || "";
   const stamp = pfData.stamp || "";
 
-  // スキル集計
-  const skillCounts = {};
-  SKILL_DEFINITIONS.forEach(s => skillCounts[s.id] = 0);
-  Object.values(reflections).forEach(r => {
-    if (r.skills && Array.isArray(r.skills)) {
-      r.skills.forEach(sId => {
-        if (skillCounts[sId] !== undefined) skillCounts[sId]++;
-      });
-    }
+  // スキル集計（グラフ用データ）とあゆみタイムラインは共通ヘルパーで作る
+  const skillData = computePortfolioSkillData(reflections);
+  const chartLabels = skillData.chartLabels;
+  const chartData = skillData.chartData;
+  const maxVal = skillData.maxVal;
+
+  // タイムラインHTML（モーダルでは編集アイコンは Swal.close 経由で開き直す）
+  const timelineHtml = buildPortfolioTimelineHtml(reflections, {
+    editHandler: isTeacher ? null : (h => `Swal.close(); setTimeout(() => openDailyReflectionModal(${h}), 300);`)
   });
-  const chartLabels = SKILL_DEFINITIONS.map(s => s.label);
-  const chartData = SKILL_DEFINITIONS.map(s => skillCounts[s.id]);
-  const maxVal = Math.max(5, ...chartData) + 1;
-
-  // タイムラインHTML
-  let timelineHtml = '<div class="timeline-wrapper ps-2 border-start border-3 ms-3">';
-  const sortedHours = Object.keys(reflections).map(Number).sort((a,b)=>a-b);
-  
-  if (sortedHours.length === 0) {
-    timelineHtml += '<div class="text-muted ms-3 small">まだふりかえりの記録がありません</div>';
-  } else {
-    sortedHours.forEach(h => {
-      const r = reflections[h];
-      const achIcon = r.achievement === 'A' ? '◎' : (r.achievement === 'B' ? '〇' : '△');
-      const achColor = r.achievement === 'A' ? 'text-primary' : (r.achievement === 'B' ? 'text-success' : 'text-secondary');
-      
-      let tagsHtml = '';
-      if(r.skills && r.skills.length > 0) {
-        tagsHtml = '<div class="mt-1">' + r.skills.map(sid => {
-          const def = SKILL_DEFINITIONS.find(d => d.id === sid);
-          return def ? `<span class="badge rounded-pill bg-light text-dark border me-1 small fw-normal">${def.label}</span>` : '';
-        }).join('') + '</div>';
-      }
-
-      // 先生が閲覧している場合は編集アイコンを表示しない（編集は本人のみ）
-      const editIcon = isTeacher ? '' : `<i class="bi bi-pencil-square text-muted ms-2 cursor-pointer edit-icon" onclick="Swal.close(); setTimeout(() => openDailyReflectionModal(${h}), 300);"></i>`;
-      timelineHtml += `
-        <div class="position-relative mb-4 ms-3">
-          <div class="position-absolute top-0 start-0 translate-middle rounded-circle bg-white border border-2" style="width:12px;height:12px;left:-22px!important;"></div>
-          <div class="small fw-bold text-muted mb-1 d-flex align-items-center">
-            第${h}時 <span class="${achColor} ms-2 fs-6">${achIcon}</span>
-            ${editIcon}
-          </div>
-          <div class="bg-light p-2 rounded small">${escapeHtml(r.comment) || 'コメントなし'}</div>
-          ${tagsHtml}
-        </div>`;
-    });
-  }
-  timelineHtml += '</div>';
 
   // 先生からのフィードバック
   let feedbackHtml = '';
@@ -1060,43 +1085,115 @@ function renderPortfolioModal(name, isTeacher = false) {
     showCloseButton: true,
     showConfirmButton: false,
     didOpen: () => {
-      // チャート描画
-      const ctx = document.getElementById('skillRadarChart').getContext('2d');
+      drawSkillRadar('skillRadarChart', chartLabels, chartData, maxVal);
+    }
+  });
+}
 
-      // 高DPI端末での「ぼやけ」対策。CSS上の大きさと実際の描画ピクセル数を分ける。
-      // dpr を 2 で頭打ちにするのは、3倍端末で 9倍の面積を描くと
-      // メモリ4GBの Chromebook がタブごと落ちるため。2 あれば肉眼では十分きれい。
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+// ------------------------------------
+//  ポートフォリオ共通ヘルパー（モーダルとフル画面ビューで共有）
+// ------------------------------------
 
-      new Chart(ctx, {
-        type: 'radar',
-        data: {
-          labels: chartLabels,
-          datasets: [{
-            label: '発揮した力',
-            data: chartData,
-            backgroundColor: 'rgba(26, 115, 232, 0.2)',
-            borderColor: 'rgba(26, 115, 232, 1)',
-            pointBackgroundColor: 'rgba(26, 115, 232, 1)',
-            borderWidth: 2
-          }]
-        },
-        options: {
-          scales: {
-            r: {
-              angleLines: { display: true },
-              suggestedMin: 0,
-              suggestedMax: maxVal,
-              ticks: { stepSize: 1, backdropColor: 'transparent' }
-            }
-          },
-          plugins: { legend: { display: false } },
-          maintainAspectRatio: false,
-          devicePixelRatio: dpr,
-          // 画面回転・分割画面・電子黒板への出力切替に追従させる
-          responsive: true
-        }
+/**
+ * [計算] ふりかえりから「発揮した力」の集計を作る（レーダーチャート用）。
+ * @returns {{chartLabels:string[], chartData:number[], maxVal:number}}
+ */
+function computePortfolioSkillData(reflections) {
+  const skillCounts = {};
+  SKILL_DEFINITIONS.forEach(s => skillCounts[s.id] = 0);
+  Object.values(reflections || {}).forEach(r => {
+    if (r && r.skills && Array.isArray(r.skills)) {
+      r.skills.forEach(sId => {
+        if (skillCounts[sId] !== undefined) skillCounts[sId]++;
       });
+    }
+  });
+  const chartLabels = SKILL_DEFINITIONS.map(s => s.label);
+  const chartData = SKILL_DEFINITIONS.map(s => skillCounts[s.id]);
+  const maxVal = Math.max(5, ...chartData) + 1;
+  return { chartLabels, chartData, maxVal };
+}
+
+/**
+ * [HTML生成] あゆみ（毎時ふりかえり）のタイムライン。
+ * @param {Object} reflections {時数: {achievement,comment,skills}}
+ * @param {Object} [opts] { editHandler:(h)=>string|null } 編集アイコンの onclick を返す関数（null で非表示）
+ */
+function buildPortfolioTimelineHtml(reflections, opts) {
+  const editHandler = opts && opts.editHandler ? opts.editHandler : null;
+  let html = '<div class="timeline-wrapper ps-2 border-start border-3 ms-3">';
+  const sortedHours = Object.keys(reflections || {}).map(Number).sort((a, b) => a - b);
+  if (sortedHours.length === 0) {
+    html += '<div class="text-muted ms-3 small">まだふりかえりの記録がありません</div>';
+  } else {
+    sortedHours.forEach(h => {
+      const r = reflections[h];
+      const achIcon = r.achievement === 'A' ? '◎' : (r.achievement === 'B' ? '〇' : '△');
+      const achColor = r.achievement === 'A' ? 'text-primary' : (r.achievement === 'B' ? 'text-success' : 'text-secondary');
+      let tagsHtml = '';
+      if (r.skills && r.skills.length > 0) {
+        tagsHtml = '<div class="mt-1">' + r.skills.map(sid => {
+          const def = SKILL_DEFINITIONS.find(d => d.id === sid);
+          return def ? `<span class="badge rounded-pill bg-light text-dark border me-1 small fw-normal">${escapeHtml(def.label)}</span>` : '';
+        }).join('') + '</div>';
+      }
+      // h は Object.keys().map(Number) 由来の数値なので onclick へ直接埋め込んでよい
+      const editIcon = editHandler
+        ? `<i class="bi bi-pencil-square text-muted ms-2 cursor-pointer edit-icon" role="button" tabindex="0" aria-label="このふりかえりを直す" onclick="${editHandler(h)}"></i>`
+        : '';
+      html += `
+        <div class="position-relative mb-4 ms-3">
+          <div class="position-absolute top-0 start-0 translate-middle rounded-circle bg-white border border-2" style="width:12px;height:12px;left:-22px!important;"></div>
+          <div class="small fw-bold text-muted mb-1 d-flex align-items-center">
+            第${h}時 <span class="${achColor} ms-2 fs-6">${achIcon}</span>
+            ${editIcon}
+          </div>
+          <div class="bg-light p-2 rounded small">${escapeHtml(r.comment) || 'コメントなし'}</div>
+          ${tagsHtml}
+        </div>`;
+    });
+  }
+  html += '</div>';
+  return html;
+}
+
+/**
+ * [描画] スキルのレーダーチャートを描く（Chart.js）。
+ * 高DPI端末での「ぼやけ」対策で dpr を 2 で頭打ちにする（3倍端末で 9倍の
+ * 面積を描くとメモリ4GBの Chromebook がタブごと落ちるため）。
+ */
+function drawSkillRadar(canvasId, chartLabels, chartData, maxVal) {
+  const el = document.getElementById(canvasId);
+  if (!el) return;
+  const ctx = el.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  new Chart(ctx, {
+    type: 'radar',
+    data: {
+      labels: chartLabels,
+      datasets: [{
+        label: '発揮した力',
+        data: chartData,
+        backgroundColor: 'rgba(26, 115, 232, 0.2)',
+        borderColor: 'rgba(26, 115, 232, 1)',
+        pointBackgroundColor: 'rgba(26, 115, 232, 1)',
+        borderWidth: 2
+      }]
+    },
+    options: {
+      scales: {
+        r: {
+          angleLines: { display: true },
+          suggestedMin: 0,
+          suggestedMax: maxVal,
+          ticks: { stepSize: 1, backdropColor: 'transparent' }
+        }
+      },
+      plugins: { legend: { display: false } },
+      maintainAspectRatio: false,
+      devicePixelRatio: dpr,
+      // 画面回転・分割画面・電子黒板への出力切替に追従させる
+      responsive: true
     }
   });
 }
@@ -1107,6 +1204,291 @@ function saveSummary() {
   dataStore.portfolioData.summary = val;
   google.script.run.savePortfolio(appState.user.name, appState.unit.id, val, appState.user.classId);
   showToast('success', '保存しました');
+}
+
+// ==========================================
+//  ポートフォリオ画面 (Portfolio View / タブ)
+// ==========================================
+
+/**
+ * [画面描画] ポートフォリオ（フル画面ビュー）。
+ * 本人の学びの記録を集約して見せる：
+ *   ・単元のまとめ（本人が編集）＋ スキルのレーダーチャート ＋ あゆみタイムライン
+ *   ・提出したワークシートの一覧（サムネイル・状態・先生コメントの有無）
+ * すべて本人のデータのみ（サーバーが本人性を保証）。表示テキストはエスケープ。
+ */
+function renderStudentPortfolio() {
+  const container = document.getElementById('app-container');
+  const reflections = dataStore.studentReflections || {};
+  const pfData = dataStore.portfolioData || {};
+  const summary = pfData.summary || "";
+  const feedback = pfData.feedback || "";
+  const stamp = pfData.stamp || "";
+
+  const skillData = computePortfolioSkillData(reflections);
+  const timelineHtml = buildPortfolioTimelineHtml(reflections, {
+    editHandler: (h) => `openDailyReflectionModal(${h})`
+  });
+
+  // 先生からのメッセージ
+  let feedbackHtml = '';
+  if (feedback || stamp) {
+    const stampIcon = {'check':'✅','good':'👍','great':'💮','support':'🚩'}[stamp] || '';
+    feedbackHtml = `
+      <div class="mt-3 border p-3 rounded bg-white shadow-sm">
+        <div class="small fw-bold text-primary mb-2"><i class="bi bi-person-badge-fill me-1"></i>先生からのメッセージ</div>
+        <div class="d-flex align-items-start">
+          <div class="display-4 me-3">${stampIcon}</div>
+          <div class="flex-grow-1 bg-light p-2 rounded small text-dark">${escapeHtml(feedback) || '（コメントなし）'}</div>
+        </div>
+      </div>`;
+  }
+
+  container.innerHTML = `
+    <div class="px-2 pt-2">
+      <div class="d-flex align-items-center mb-3">
+        <h5 class="fw-bold m-0 text-primary"><i class="bi bi-journal-text me-2"></i><ruby>記録<rt>きろく</rt></ruby>（ポートフォリオ）</h5>
+        <span class="badge bg-light text-secondary border ms-2">${escapeHtml(appState.user.name)}</span>
+      </div>
+
+      <!-- 発揮した力（レーダー） -->
+      <div class="card shadow-sm border-0 rounded-4 mb-3">
+        <div class="card-body">
+          <div class="small fw-bold text-muted mb-2"><i class="bi bi-graph-up me-1"></i>はっきした<ruby>力<rt>ちから</rt></ruby></div>
+          <div class="chart-container" style="position: relative; height:280px; width:100%">
+            <canvas id="studentPortfolioRadar"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- 単元のまとめ（本人が編集） -->
+      <div class="card shadow-sm border-0 rounded-4 mb-3">
+        <div class="card-body">
+          <div class="small fw-bold text-muted mb-2"><i class="bi bi-pencil-square me-1"></i>この<ruby>単元<rt>たんげん</rt></ruby>のまとめ</div>
+          <div class="small text-muted mb-2">学んだこと、できるようになったことを書きましょう。</div>
+          <textarea id="pf-summary" class="form-control bg-light border-0" rows="6" placeholder="ここにまとめを書こう...">${escapeHtml(summary)}</textarea>
+          <button class="btn btn-primary rounded-pill w-100 mt-3" onclick="saveSummary()"><ruby>保存<rt>ほぞん</rt></ruby>する</button>
+          ${feedbackHtml}
+        </div>
+      </div>
+
+      <!-- あゆみ（毎時ふりかえり） -->
+      <div class="card shadow-sm border-0 rounded-4 mb-3">
+        <div class="card-body">
+          <div class="small fw-bold text-muted mb-2"><i class="bi bi-signpost-split me-1"></i>あゆみ</div>
+          <div style="max-height: 320px; overflow-y: auto;">${timelineHtml}</div>
+        </div>
+      </div>
+
+      <!-- 提出したワークシート -->
+      <div class="card shadow-sm border-0 rounded-4 mb-3">
+        <div class="card-body">
+          <div class="small fw-bold text-muted mb-2"><i class="bi bi-file-earmark-check me-1"></i>ていしゅつした ワークシート</div>
+          <div id="portfolio-worksheets">
+            <div class="text-center text-muted py-4"><div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>よみこみ中...</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  drawSkillRadar('studentPortfolioRadar', skillData.chartLabels, skillData.chartData, skillData.maxVal);
+  loadPortfolioWorksheets();
+}
+
+/**
+ * [サーバー通信] 本人の提出ワークシートを取得して一覧描画。
+ * studentId は送らない（サーバーが本人性を判定）。
+ */
+function loadPortfolioWorksheets() {
+  const host = document.getElementById('portfolio-worksheets');
+  if (!host) return;
+  google.script.run
+    .withSuccessHandler(function (subs) {
+      const target = document.getElementById('portfolio-worksheets');
+      if (!target) return;
+      const list = Array.isArray(subs) ? subs : [];
+      if (list.length === 0) {
+        target.innerHTML = '<div class="text-muted small text-center py-3">まだ提出したワークシートはありません</div>';
+        return;
+      }
+      target.innerHTML = '<div class="row g-2">' + list.map(function (s) {
+        const title = escapeHtml(s.stepTitle || '無題');
+        const unit = escapeHtml(s.unitName || '');
+        const statusMap = { submitted: '提出ずみ', graded: '先生がみた', draft: '下書き' };
+        const statusLabel = escapeHtml(statusMap[s.status] || s.status || '');
+        const statusClass = s.status === 'graded' ? 'bg-success' : (s.status === 'submitted' ? 'bg-primary' : 'bg-secondary');
+        const hasFeedback = (s.feedbackText && String(s.feedbackText).trim() !== '') || s.status === 'graded';
+        const thumb = s.canvasImage
+          ? `<img src="${escUrl(s.canvasImage)}" alt="${title} のサムネイル" style="width:100%;height:90px;object-fit:cover;object-position:top;border-radius:.5rem .5rem 0 0;background:#fff;">`
+          : `<div class="d-flex align-items-center justify-content-center text-muted" style="height:90px;background:#f1f3f5;border-radius:.5rem .5rem 0 0;"><i class="bi bi-file-earmark-text fs-2" aria-hidden="true"></i></div>`;
+        const fbBadge = hasFeedback
+          ? '<span class="badge bg-warning text-dark"><i class="bi bi-chat-heart-fill me-1" aria-hidden="true"></i>コメント</span>'
+          : '';
+        return `
+          <div class="col-6 col-md-4">
+            <div class="card h-100 border-0 shadow-sm rounded-3" role="button" tabindex="0"
+                 aria-label="${title} をひらく"
+                 onclick="openMyWorksheet('${escJs(s.taskId)}','${escJs(s.stepTitle || '')}')"
+                 onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); openMyWorksheet('${escJs(s.taskId)}','${escJs(s.stepTitle || '')}');}">
+              ${thumb}
+              <div class="card-body p-2">
+                <div class="small fw-bold text-truncate">${title}</div>
+                ${unit ? `<div class="x-small text-muted text-truncate">${unit}</div>` : ''}
+                <div class="d-flex flex-wrap gap-1 mt-1">
+                  <span class="badge ${statusClass}">${statusLabel}</span>
+                  ${fbBadge}
+                </div>
+              </div>
+            </div>
+          </div>`;
+      }).join('') + '</div>';
+    })
+    .withFailureHandler(function (err) {
+      const target = document.getElementById('portfolio-worksheets');
+      if (target) target.innerHTML = '<div class="text-danger small text-center py-3">読み込みに失敗しました</div>';
+      if (typeof console !== 'undefined') console.error(err);
+    })
+    .getMyWorksheetSubmissions();
+}
+
+/**
+ * [アクション] 本人の提出ワークシートを開く（回答＋先生コメントを確認）。
+ */
+function openMyWorksheet(taskId, title) {
+  if (typeof Worksheet !== 'undefined' && Worksheet.openStudent) {
+    Worksheet.openStudent({ taskId: taskId, title: title || '', unitId: appState.unit.id });
+  }
+}
+
+// ==========================================
+//  ひろば画面 (Plaza / Peer Gallery)
+// ==========================================
+
+// ひろばの状態（選択中のワークシートと、その共有回答の一覧）
+let plazaState = { taskId: '', title: '', responses: [] };
+
+/**
+ * [画面描画] ひろば：友だちが公開したワークシートを見て、リアクションできる。
+ * ワークシートを選ぶ → getSharedResponses で共有作品を取得 → タップで閲覧。
+ */
+function renderStudentPlaza() {
+  const container = document.getElementById('app-container');
+  container.innerHTML = `
+    <div class="px-2 pt-2">
+      <div class="d-flex align-items-center mb-3">
+        <h5 class="fw-bold m-0 text-primary"><i class="bi bi-people-fill me-2"></i>ひろば</h5>
+        <span class="small text-muted ms-2">みんなの ワークシートを みてみよう</span>
+      </div>
+      <div class="card border-0 shadow-sm rounded-4 mb-3">
+        <div class="card-body">
+          <label class="small fw-bold text-muted d-block mb-2" for="plaza-task-select">ワークシートを えらぶ</label>
+          <div id="plaza-picker">
+            <div class="text-center text-muted py-3"><div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>よみこみ中...</div>
+          </div>
+        </div>
+      </div>
+      <div id="plaza-grid"></div>
+    </div>`;
+  loadPlazaTaskList();
+}
+
+/**
+ * [サーバー通信] 配信済みワークシート一覧を取得してピッカーを作る。
+ */
+function loadPlazaTaskList() {
+  google.script.run
+    .withSuccessHandler(function (listRaw) {
+      const picker = document.getElementById('plaza-picker');
+      if (!picker) return;
+      const list = Array.isArray(listRaw) ? listRaw.filter(function (w) { return w && w.taskId; }) : [];
+      if (list.length === 0) {
+        picker.innerHTML = '<div class="text-muted small">まだ ワークシートが ありません</div>';
+        return;
+      }
+      const options = list.map(function (w) {
+        const label = (w.unitName ? w.unitName + '：' : '') + (w.stepTitle || '無題');
+        const sel = w.taskId === plazaState.taskId ? ' selected' : '';
+        return `<option value="${escapeHtml(w.taskId)}"${sel}>${escapeHtml(label)}</option>`;
+      }).join('');
+      picker.innerHTML = `
+        <select id="plaza-task-select" class="form-select form-select-lg rounded-pill" onchange="onPlazaTaskPick(this.value, this.options[this.selectedIndex].text)">
+          <option value="" ${plazaState.taskId ? '' : 'selected'} disabled>ワークシートを えらんでね</option>
+          ${options}
+        </select>`;
+      // 既に選択済みなら再取得して復元
+      if (plazaState.taskId) loadPlazaResponses(plazaState.taskId, plazaState.title);
+    })
+    .withFailureHandler(function (err) {
+      const picker = document.getElementById('plaza-picker');
+      if (picker) picker.innerHTML = '<div class="text-danger small">読み込みに失敗しました</div>';
+      if (typeof console !== 'undefined') console.error(err);
+    })
+    .getStudentWorksheetList();
+}
+
+/** [アクション] ピッカーでワークシートを選んだとき */
+function onPlazaTaskPick(taskId, label) {
+  if (!taskId) return;
+  plazaState.taskId = taskId;
+  plazaState.title = label || '';
+  loadPlazaResponses(taskId, label);
+}
+
+/**
+ * [サーバー通信] 選んだワークシートの共有回答を取得してグリッド描画。
+ * 他児童のメール/IDはサーバーが渡さない（表示名のみ）。
+ */
+function loadPlazaResponses(taskId, label) {
+  const grid = document.getElementById('plaza-grid');
+  if (grid) grid.innerHTML = '<div class="text-center text-muted py-4"><div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>よみこみ中...</div>';
+  google.script.run
+    .withSuccessHandler(function (resRaw) {
+      const target = document.getElementById('plaza-grid');
+      if (!target) return;
+      const responses = Array.isArray(resRaw) ? resRaw : [];
+      // taskId をクライアント側で各回答へ添える（openPeer が必要とする）
+      responses.forEach(function (r) { r.taskId = taskId; });
+      plazaState.responses = responses;
+      if (responses.length === 0) {
+        target.innerHTML = '<div class="text-center text-muted py-5"><i class="bi bi-emoji-smile fs-1 d-block mb-2" aria-hidden="true"></i>まだ 公開された作品が ありません</div>';
+        return;
+      }
+      target.innerHTML = '<div class="row g-2">' + responses.map(function (r, idx) {
+        const name = escapeHtml(r.studentName || 'おともだち');
+        const reactCount = Array.isArray(r.reactions) ? r.reactions.length : 0;
+        const thumb = r.canvasImage
+          ? `<img src="${escUrl(r.canvasImage)}" alt="${name} の作品" style="width:100%;height:120px;object-fit:cover;object-position:top;border-radius:.5rem .5rem 0 0;background:#fff;">`
+          : `<div class="d-flex align-items-center justify-content-center text-muted" style="height:120px;background:#f1f3f5;border-radius:.5rem .5rem 0 0;"><i class="bi bi-vector-pen fs-2" aria-hidden="true"></i></div>`;
+        return `
+          <div class="col-6 col-md-4 col-lg-3">
+            <div class="card h-100 border-0 shadow-sm rounded-3" role="button" tabindex="0"
+                 aria-label="${name} の作品をひらく"
+                 onclick="openPlazaPeer(${idx})"
+                 onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); openPlazaPeer(${idx});}">
+              ${thumb}
+              <div class="card-body p-2">
+                <div class="small fw-bold text-truncate"><i class="bi bi-person-circle me-1" aria-hidden="true"></i>${name}</div>
+                ${reactCount ? `<div class="x-small text-muted mt-1"><i class="bi bi-heart-fill text-danger me-1" aria-hidden="true"></i>${reactCount}</div>` : ''}
+              </div>
+            </div>
+          </div>`;
+      }).join('') + '</div>';
+    })
+    .withFailureHandler(function (err) {
+      const target = document.getElementById('plaza-grid');
+      if (target) target.innerHTML = '<div class="text-danger small text-center py-3">読み込みに失敗しました</div>';
+      if (typeof console !== 'undefined') console.error(err);
+    })
+    .getSharedResponses(taskId);
+}
+
+/** [アクション] ひろばの作品を開く（読み取り専用のピア閲覧） */
+function openPlazaPeer(idx) {
+  const r = plazaState.responses[idx];
+  if (!r) return;
+  if (typeof Worksheet !== 'undefined' && Worksheet.openPeer) {
+    Worksheet.openPeer(r);
+  }
 }
 
 /**
