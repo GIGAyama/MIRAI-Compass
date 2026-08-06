@@ -30,15 +30,17 @@ const CONSTANTS = {
 };
 
 // 資質・能力スキル定義（ふりかえり時に選択するバッジ）
+// kana: 児童画面用の読み。HTML ではルビに、Chart.js のレーダー（canvas＝ルビ不可）では
+//       かな表示に使う。先生画面は従来どおり漢字ラベル。
 const SKILL_DEFINITIONS = [
-  { id: 'self_manage', label: '自己管理', group: '自分', color: 'primary' },
-  { id: 'planning', label: '計画性', group: '自分', color: 'primary' },
-  { id: 'communication', label: '対話', group: '人', color: 'success' },
-  { id: 'collaboration', label: '協力', group: '人', color: 'success' },
-  { id: 'challenge', label: '挑戦', group: '課題', color: 'danger' },
-  { id: 'thinking', label: '工夫', group: '課題', color: 'danger' },
-  { id: 'habit', label: '集中', group: '生活', color: 'warning' },
-  { id: 'responsibility', label: '責任', group: '生活', color: 'warning' }
+  { id: 'self_manage', label: '自己管理', kana: 'じこかんり', group: '自分', color: 'primary' },
+  { id: 'planning', label: '計画性', kana: 'けいかくせい', group: '自分', color: 'primary' },
+  { id: 'communication', label: '対話', kana: 'たいわ', group: '人', color: 'success' },
+  { id: 'collaboration', label: '協力', kana: 'きょうりょく', group: '人', color: 'success' },
+  { id: 'challenge', label: '挑戦', kana: 'ちょうせん', group: '課題', color: 'danger' },
+  { id: 'thinking', label: '工夫', kana: 'くふう', group: '課題', color: 'danger' },
+  { id: 'habit', label: '集中', kana: 'しゅうちゅう', group: '生活', color: 'warning' },
+  { id: 'responsibility', label: '責任', kana: 'せきにん', group: '生活', color: 'warning' }
 ];
 
 // AI単元作成機能で使用する「呪文（プロンプト）」の初期値
@@ -620,7 +622,7 @@ function checkScheduleAndNotify() {
   if (currentSchedule) {
     const unit = appState.unitList.find(u => u.id === currentSchedule.unitId);
     const unitTitle = unit ? unit.title : "不明な単元";
-    const msg = currentSchedule.message || `ただ今の授業：${unitTitle} 第${currentSchedule.hour}時`;
+    const msg = currentSchedule.message || `いまの じゅぎょう：${unitTitle}（${currentSchedule.hour}じかんめ）`;
     const msgHtml = escapeHtml(msg);
     
     // 通知バーを作成・更新
@@ -634,12 +636,12 @@ function checkScheduleAndNotify() {
         if(unit) {
           changeUnit(unit.id);
           if (typeof changeCurrentHour === 'function') changeCurrentHour(currentSchedule.hour);
-          if(currentSchedule.message) Swal.fire({ title: '先生からのメッセージ', text: currentSchedule.message, icon: 'info' });
+          if(currentSchedule.message) Swal.fire({ title: '<ruby>先生<rt>せんせい</rt></ruby>からの メッセージ', text: currentSchedule.message, icon: 'info' });
         }
       };
       document.body.appendChild(notifyBar);
     }
-    notifyBar.innerHTML = `<i class="bi bi-broadcast me-2"></i><span class="fw-bold">${msgHtml}</span> <small class="ms-2 border rounded-pill px-2">移動する</small>`;
+    notifyBar.innerHTML = `<i class="bi bi-broadcast me-2"></i><span class="fw-bold">${msgHtml}</span> <small class="ms-2 border rounded-pill px-2">いどうする</small>`;
     // バーは fixed なので、そのままだと画面上部の内容（あいさつ等）に重なる。
     // 本文側に余白を足すためのクラスを付ける（css.html 参照）。
     document.body.classList.add('has-schedule-bar');
