@@ -344,14 +344,17 @@ function updateLiveViews() {
   // LIVEビューの場合
   if (appState.view.teacher === 'cards') {
     students.forEach(s => {
-      const card = document.getElementById(`live-card-${s.name}`);
+      // id は生成時に escapeHtml した文字列で作られるため、& や引用符を含む名前だと
+      // getElementById の生文字列と一致しなくなる。座席表と同じ data-name + CSS.escape 方式で引く。
+      const nameSel = (window.CSS && CSS.escape) ? CSS.escape(s.name) : String(s.name).replace(/["\\\]]/g, '\\$&');
+      const card = document.querySelector(`.live-card[data-name="${nameSel}"]`);
       if (card) {
         const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
         const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
         const isOtherUnit = s.currentUnitId && s.currentUnitId !== appState.unit.id;
         
-        // クラスの付け替え
-        card.className = `card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}`;
+        // クラスの付け替え（検索用の live-card は残す）
+        card.className = `live-card card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}`;
         card.style.opacity = isOtherUnit ? '0.5' : '1';
         
         // アイコン更新
@@ -416,7 +419,7 @@ function renderLiveCards(container, students) {
 
       return `
       <div class="col">
-        <div id="live-card-${escapeHtml(s.name)}" class="card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}" style="opacity: ${opacity}">
+        <div data-name="${escapeHtml(s.name)}" class="live-card card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}" style="opacity: ${opacity}">
           <div class="fw-bold text-truncate mb-2">${escapeHtml(s.name)}</div>
           <i class="bi bi-person-circle fs-1 my-2 ${isSos ? 'text-danger' : (isFocus ? 'text-info' : 'text-secondary')}"></i>
           <div class="small text-muted text-truncate task-text">${taskDisplay}</div>
@@ -1404,8 +1407,11 @@ function renderTeacherDesignView(container) {
         if (task) {
           task.step = newStep;
           renderTeacherDesignView(document.getElementById('t-area')); 
-          // サーバー保存
-          runTeacher('updateUnitTask', [taskId, { step: newStep }], null, handleError);
+          // サーバー保存。失敗すると画面は動いたのにDBは元のまま、という食い違いが残るため、
+          // {success:false} も含めて失敗を検知して知らせる。
+          runTeacher('updateUnitTask', [taskId, { step: newStep }], res => {
+            if (res && res.success === false) handleError({ message: res.error || 'タスクの移動を保存できませんでした' });
+          }, handleError);
         }
       }
     });
@@ -1459,6 +1465,23 @@ function openTeacherTaskEditModal(taskId) {
               <option value="ふかめる" ${task.category==='ふかめる'?'selected':''}>ふかめる</option>
               <option value="まとめる" ${task.category==='まとめる'?'selected':''}>まとめる</option>
               <option value="導入" ${task.category==='導入'?'selected':''}>導入</option>
+            </select>
+          </div>
+        </div>
+        <div class="row mb-3">
+          <div class="col">
+            <label class="form-label small fw-bold">必修 / 選択</label>
+            <select id="ed-type" class="form-select">
+              <option value="must" ${task.type!=='challenge'?'selected':''}>必修（みんなが取り組む）</option>
+              <option value="challenge" ${task.type==='challenge'?'selected':''}>選択（チャレンジ課題）</option>
+            </select>
+          </div>
+          <div class="col">
+            <label class="form-label small fw-bold">おすすめの実施回</label>
+            <select id="ed-step" class="form-select">
+              <option value="" ${!getStepNumber(task.step)?'selected':''}>自由配置（いつでも）</option>
+              ${Array.from({length: appState.unit.totalHours || 8}, (_, i) => i + 1).map(h =>
+                `<option value="Step ${h}" ${getStepNumber(task.step)===h?'selected':''}>第${h}時</option>`).join('')}
             </select>
           </div>
         </div>
@@ -1524,6 +1547,8 @@ function openTeacherTaskEditModal(taskId) {
         estTime: parseInt(document.getElementById('ed-time').value),
         category: document.getElementById('ed-cat').value,
         format: document.getElementById('ed-teacher').checked ? 'teacher' : 'student',
+        type: document.getElementById('ed-type').value,
+        step: document.getElementById('ed-step').value,
         textbook: tbStr,
         tablet: tabStr,
         print: prStr
@@ -1543,10 +1568,10 @@ function openTeacherTaskEditModal(taskId) {
             estTime: newData.estTime,
             category: newData.category,
             format: newData.format,
-            step: '',
+            step: newData.step || '',
             time: newData.estTime,
             desc: newData.description,
-            type: 'must',
+            type: newData.type || 'must',
             textbook: newData.textbook,
             tablet: newData.tablet,
             print: newData.print
@@ -1583,6 +1608,8 @@ function openTeacherTaskEditModal(taskId) {
         t.time = newData.estTime;
         t.category = newData.category;
         t.format = newData.format;
+        t.type = newData.type;
+        t.step = newData.step;
         t.textbook = newData.textbook;
         t.tablet = newData.tablet;
         t.print = newData.print;
@@ -1661,15 +1688,23 @@ function openUnitManagerModal() {
       html: `
         <ul class="nav nav-tabs mb-3" id="unit-mgr-tabs" role="tablist">
           <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="um-create-tab" data-bs-toggle="tab" data-bs-target="#um-create" type="button">手動で新規作成</button>
+            <button class="nav-link active" id="um-template-tab" data-bs-toggle="tab" data-bs-target="#um-template" type="button"><i class="bi bi-collection-fill text-success me-1"></i>テンプレートから作成</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="um-create-tab" data-bs-toggle="tab" data-bs-target="#um-create" type="button">手動で新規作成</button>
           </li>
           <li class="nav-item" role="presentation">
             <button class="nav-link" id="um-ai-tab" data-bs-toggle="tab" data-bs-target="#um-ai" type="button"><i class="bi bi-stars text-warning me-1"></i>AIインポート</button>
           </li>
         </ul>
         <div class="tab-content text-start" id="unit-mgr-content">
+          <!-- テンプレートタブ：はじめての先生でもワンクリックで自由進度学習を始められる -->
+          <div class="tab-pane fade show active" id="um-template" role="tabpanel">
+            <p class="small text-muted mb-3">導入〜ふりかえりまで組み立てずみの単元一式を、そのまま使える形で作成します。作成後は設計ビューで自由に手直しできます。</p>
+            <div class="row g-3">${renderUnitTemplateCards()}</div>
+          </div>
           <!-- 手動作成タブ -->
-          <div class="tab-pane fade show active" id="um-create" role="tabpanel">
+          <div class="tab-pane fade" id="um-create" role="tabpanel">
             <div class="mb-3">
               <label class="form-label small fw-bold">単元名 <span class="text-danger">*</span></label>
               <input id="cu-title" class="form-control" placeholder="例：火事からくらしを守る">
@@ -1767,16 +1802,22 @@ function openUnitManagerModal() {
       didOpen: () => {
         const popup = Swal.getPopup();
         popup.style.transition = 'width 0.3s ease-in-out, max-width 0.3s ease-in-out';
-        
+
+        const tabTemplate = document.getElementById('um-template-tab');
         const tabCreate = document.getElementById('um-create-tab');
         const tabAi = document.getElementById('um-ai-tab');
-        
+
         // タブ切り替え時に幅を調整
+        tabTemplate.addEventListener('shown.bs.tab', () => {
+           popup.style.width = '800px';
+           popup.style.maxWidth = '95vw';
+        });
+
         tabCreate.addEventListener('shown.bs.tab', () => {
            popup.style.width = '600px';
            popup.style.maxWidth = '95vw';
         });
-        
+
         tabAi.addEventListener('shown.bs.tab', () => {
            popup.style.width = '90%';
            popup.style.maxWidth = '1200px';
@@ -1784,6 +1825,199 @@ function openUnitManagerModal() {
       }
     });
   }).withFailureHandler(handleError).getCustomAiPrompt();
+}
+
+// ==========================================
+//  単元テンプレートライブラリ
+// ==========================================
+// 「自由進度学習をやってみたいが、単元をゼロから設計するのが最初の壁」という
+// 先生のために、導入〜まとめまで組み立てずみの単元一式を同梱する。
+// データ形式は AIインポート（importUnitJson）と同一。作成後は設計ビューで自由に編集できる。
+const UNIT_TEMPLATES = [
+  {
+    icon: 'bi-compass', color: 'success', badge: 'まずはこれ',
+    summary: '自由進度学習そのものを練習する短い単元。アプリの使い方・計画の立て方・ふりかえりの書き方を、実際にやりながら身につけます。初めてのクラスの最初の3時間に。',
+    data: {
+      unitInfo: { subject: 'どの教科でも', grade: '', unitName: 'はじめての自由進度学習', totalHours: 3,
+        goal: 'じぶんで けいかくを立てて、じぶんのペースで 学べるように なろう',
+        description: '自由進度学習の「学び方」を学ぶ練習単元。アプリの操作、計画づくり、ふりかえりまでをひととおり体験する。' },
+      tasks: [
+        { id: 't_01', category: 'つかむ', type: 'must', format: 'teacher', step: 'Step 1', title: '【導入】自由進度学習ってなに？', description: 'これからの学び方について先生の話を聞こう。「じぶんで決める」ってどういうことかな？', estimatedTime: 15, prerequisites: [] },
+        { id: 't_02', category: 'つかむ', type: 'must', format: 'student', step: 'Step 1', title: 'アプリの使い方をためそう', description: '「できた！」ボタン、メモ、タイマーを実際に使ってみよう。', estimatedTime: 10, prerequisites: [] },
+        { id: 't_03', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 1', title: '学習計画を立てよう', description: '「けいかく」タブで、のこりの時間の計画を立てよう。あとから変えてもOK！', estimatedTime: 15, prerequisites: ['t_02'] },
+        { id: 't_04', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 2', title: 'めあてを決めて学習しよう', description: '今日のめあてをメモに書いてから、いま勉強している教科の課題に取り組もう。', estimatedTime: 25, prerequisites: ['t_03'] },
+        { id: 't_05', category: 'ふかめる', type: 'challenge', format: 'student', step: '', title: '友だちの計画を見てみよう', description: '「みんなの けいかく」を見て、よいところを1つ見つけてまねしてみよう。', estimatedTime: 10, prerequisites: [] },
+        { id: 't_06', category: 'ふかめる', type: 'challenge', format: 'student', step: '', title: 'タイマーで集中チャレンジ', description: '15分タイマーをセットして、その間は1つのことに集中してみよう。', estimatedTime: 15, prerequisites: [] },
+        { id: 't_07', category: 'まとめる', type: 'must', format: 'student', step: 'Step 3', title: 'ふりかえりを書こう', description: '3時間の学びをふりかえって、できるようになったこと・むずかしかったことを書こう。', estimatedTime: 15, prerequisites: ['t_04'] },
+        { id: 't_08', category: 'まとめる', type: 'must', format: 'teacher', step: 'Step 3', title: '【終末】みんなでふりかえり', description: 'クラスみんなで、自由進度学習をやってみてどうだったか話し合おう。', estimatedTime: 10, prerequisites: [] }
+      ]
+    }
+  },
+  {
+    icon: 'bi-fire', color: 'danger', badge: '社会・3年',
+    summary: '消防しょ・119番・学校や地いきの防火せつびを、調べ学習と選択課題で学ぶ8時間。新聞づくりでまとめる、社会科の定番単元です。',
+    data: {
+      unitInfo: { subject: '社会', grade: '3年', unitName: '火事からくらしを守る', totalHours: 8,
+        goal: '火事から まちを守る 人びとの くふうを 見つけよう',
+        description: '消防署の働きや地域の防火設備を調べ、火事からくらしを守る仕組みを新聞にまとめる。' },
+      tasks: [
+        { id: 't_01', category: 'つかむ', type: 'must', format: 'teacher', step: 'Step 1', title: '【導入】単元オリエンテーション', description: '火事の写真や映像を見て、調べたいことを出し合おう。学習の進め方を確認する。', estimatedTime: 15, prerequisites: [] },
+        { id: 't_02', category: 'つかむ', type: 'must', format: 'student', step: 'Step 1', title: '学習計画を立てよう', description: '「けいかく」タブで8時間の計画を立てよう。調べたいことから順番を考えよう。', estimatedTime: 20, prerequisites: [] },
+        { id: 't_03', category: 'まなぶ', type: 'must', format: 'teacher', step: 'Step 2', title: '【導入】消防しょの仕事 ミニレッスン', description: '消防しょにはどんな仕事があるのか、みんなで確かめよう。', estimatedTime: 10, prerequisites: [] },
+        { id: 't_04', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 2', title: '消防しょの仕事を調べよう', description: '教科書と資料で、消防しょの人たちの1日の仕事を調べてノートにまとめよう。', estimatedTime: 30, prerequisites: [] },
+        { id: 't_05', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 3', title: '119番のしくみを図にまとめよう', description: '119番の電話がつながってから消防車が来るまでを、矢印の図で表そう。', estimatedTime: 30, prerequisites: ['t_04'] },
+        { id: 't_06', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 4', title: '学校の消防せつびを探そう', description: '校内を歩いて、消火器・火災報知器・防火とびらを探して地図に記録しよう。', estimatedTime: 30, prerequisites: [] },
+        { id: 't_07', category: 'ふかめる', type: 'must', format: 'student', step: 'Step 5', title: '地いきの防火せつびマップを作ろう', description: '通学路にある消火せんやぼう火水そうを調べて、地いきの防火マップを作ろう。', estimatedTime: 30, prerequisites: ['t_06'] },
+        { id: 't_08', category: 'ふかめる', type: 'challenge', format: 'student', step: '', title: '消防団について調べよう', description: 'まちの消防団はどんな活動をしているのかな？ 資料やインタビューで調べよう。', estimatedTime: 30, prerequisites: [] },
+        { id: 't_09', category: 'ふかめる', type: 'challenge', format: 'student', step: '', title: '火事をふせぐポスターを作ろう', description: '火事を起こさないために大切なことを、みんなに伝わるポスターにしよう。', estimatedTime: 30, prerequisites: [] },
+        { id: 't_10', category: 'ふかめる', type: 'challenge', format: 'student', step: '', title: 'クイズ「ぼう火はかせ」を作ろう', description: '調べたことをもとに、友だちに出す3択クイズを5問作ろう。', estimatedTime: 20, prerequisites: [] },
+        { id: 't_11', category: 'まとめる', type: 'must', format: 'student', step: 'Step 7', title: '「火事からくらしを守る」新聞を作ろう', description: '調べたことの中からいちばん伝えたいことを選んで、新聞にまとめよう。', estimatedTime: 45, prerequisites: ['t_05', 't_07'] },
+        { id: 't_12', category: 'まとめる', type: 'must', format: 'student', step: 'Step 8', title: '単元のまとめ・ふりかえりを書こう', description: '新聞を読み合って、学んだことと自分の学び方をふりかえろう。', estimatedTime: 15, prerequisites: ['t_11'] },
+        { id: 't_13', category: 'まとめる', type: 'must', format: 'teacher', step: 'Step 8', title: '【終末】発表会・単元のふりかえり', description: 'グループで新聞を発表し合い、単元全体をふりかえる。', estimatedTime: 30, prerequisites: [] }
+      ]
+    }
+  },
+  {
+    icon: 'bi-grid-1x2', color: 'primary', badge: '算数・4年',
+    summary: '面積の単位から複合図形まで、練習問題を自分のペースで進める7時間。実測チャレンジや問題づくりの選択課題つき。',
+    data: {
+      unitInfo: { subject: '算数', grade: '4年', unitName: '面積', totalHours: 7,
+        goal: '広さを 数で あらわして、くらべられるように なろう',
+        description: '面積の意味と単位、長方形・正方形の公式、複合図形の求め方を自分のペースで学ぶ。' },
+      tasks: [
+        { id: 't_01', category: 'つかむ', type: 'must', format: 'teacher', step: 'Step 1', title: '【導入】広さくらべから考えよう', description: 'じんとりゲームで「広さをどうやってくらべるか」をみんなで考える。', estimatedTime: 15, prerequisites: [] },
+        { id: 't_02', category: 'つかむ', type: 'must', format: 'student', step: 'Step 1', title: '学習計画を立てよう', description: '「けいかく」タブで7時間の計画を立てよう。にがてなところに時間を多めにとろう。', estimatedTime: 15, prerequisites: [] },
+        { id: 't_03', category: 'まなぶ', type: 'must', format: 'teacher', step: 'Step 2', title: '【導入】面積の単位 ミニレッスン', description: '1cm²（平方センチメートル）という単位をみんなで確かめる。', estimatedTime: 10, prerequisites: [] },
+        { id: 't_04', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 2', title: 'cm²の意味をたしかめよう', description: '方眼を数えて面積を求める練習問題に取り組もう。', estimatedTime: 25, prerequisites: [] },
+        { id: 't_05', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 3', title: '長方形と正方形の公式', description: 'たて×よこ の公式を使って、いろいろな長方形・正方形の面積を求めよう。', estimatedTime: 30, prerequisites: ['t_04'] },
+        { id: 't_06', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 4', title: '大きな面積の単位（m²・km²・a・ha）', description: '教室や運動場の広さに合う単位を知り、単位の関係をまとめよう。', estimatedTime: 30, prerequisites: ['t_05'] },
+        { id: 't_07', category: 'ふかめる', type: 'must', format: 'student', step: 'Step 5', title: '複合図形の面積を工夫して求めよう', description: 'L字型の図形を「分ける」「ひく」の2つの方法で求めて、やり方を説明しよう。', estimatedTime: 30, prerequisites: ['t_05'] },
+        { id: 't_08', category: 'ふかめる', type: 'challenge', format: 'student', step: '', title: '教室の面積を実測しよう', description: '1mものさしで教室のたて・よこを測って、面積を計算してみよう。', estimatedTime: 30, prerequisites: [] },
+        { id: 't_09', category: 'ふかめる', type: 'challenge', format: 'student', step: '', title: '面積パズル問題を作ろう', description: '友だちに出す複合図形の問題を作って、答えと解き方も用意しよう。', estimatedTime: 20, prerequisites: [] },
+        { id: 't_10', category: 'まとめる', type: 'must', format: 'student', step: 'Step 6', title: 'たしかめ問題に挑戦しよう', description: '単元のたしかめ問題を解いて、まちがえた問題をやり直そう。', estimatedTime: 30, prerequisites: ['t_06', 't_07'] },
+        { id: 't_11', category: 'まとめる', type: 'must', format: 'student', step: 'Step 7', title: '単元のまとめを書こう', description: 'できるようになったことと、学び方のふりかえりを書こう。', estimatedTime: 15, prerequisites: ['t_10'] },
+        { id: 't_12', category: 'まとめる', type: 'must', format: 'teacher', step: 'Step 7', title: '【終末】単元テスト・ふりかえり', description: '単元テストと全体でのふりかえりを行う。', estimatedTime: 30, prerequisites: [] }
+      ]
+    }
+  },
+  {
+    icon: 'bi-stopwatch', color: 'info', badge: '理科・5年',
+    summary: '「ふりこの1往復の時間は何で決まる？」を条件をかえた3つの実験で確かめる6時間。実験→表とグラフ→レポートの流れで科学の方法を学びます。',
+    data: {
+      unitInfo: { subject: '理科', grade: '5年', unitName: 'ふりこの運動', totalHours: 6,
+        goal: 'ふりこが 1往復する時間は 何で決まるのかを、実験で たしかめよう',
+        description: '振り子の長さ・おもりの重さ・振れ幅の条件を変えて実験し、結果を整理してレポートにまとめる。' },
+      tasks: [
+        { id: 't_01', category: 'つかむ', type: 'must', format: 'teacher', step: 'Step 1', title: '【導入】ふりこの不思議を見つけよう', description: 'ブランコやメトロノームの動きを見て、ふしぎに思ったことを出し合う。', estimatedTime: 15, prerequisites: [] },
+        { id: 't_02', category: 'つかむ', type: 'must', format: 'student', step: 'Step 1', title: '学習計画と予想を立てよう', description: '「1往復の時間は何で決まるか」自分の予想を書いてから、実験の計画を立てよう。', estimatedTime: 20, prerequisites: [] },
+        { id: 't_03', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 2', title: '実験① ふりこの長さをかえると？', description: 'ふりこの長さだけをかえて、1往復の時間を3回ずつ測ろう。', estimatedTime: 35, prerequisites: [] },
+        { id: 't_04', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 3', title: '実験② おもりの重さをかえると？', description: 'おもりの重さだけをかえて、1往復の時間を測ろう。ほかの条件はそろえること！', estimatedTime: 35, prerequisites: ['t_03'] },
+        { id: 't_05', category: 'まなぶ', type: 'must', format: 'student', step: 'Step 4', title: '実験③ ふれはばをかえると？', description: 'ふれはばだけをかえて、1往復の時間を測ろう。', estimatedTime: 35, prerequisites: ['t_03'] },
+        { id: 't_06', category: 'ふかめる', type: 'challenge', format: 'student', step: '', title: 'メトロノームのしくみを調べよう', description: 'メトロノームはどうやって速さを変えているのかな？ ふりこの性質とつなげて考えよう。', estimatedTime: 20, prerequisites: [] },
+        { id: 't_07', category: 'ふかめる', type: 'challenge', format: 'student', step: '', title: 'ガリレオとふりこの歴史', description: 'ふりこのきまりを見つけたガリレオについて調べて、豆知識カードを作ろう。', estimatedTime: 20, prerequisites: [] },
+        { id: 't_08', category: 'ふかめる', type: 'must', format: 'student', step: 'Step 5', title: '実験結果を表とグラフにまとめよう', description: '3つの実験の結果を表に整理して、わかることを見つけよう。', estimatedTime: 30, prerequisites: ['t_04', 't_05'] },
+        { id: 't_09', category: 'まとめる', type: 'must', format: 'student', step: 'Step 6', title: 'わかったことをレポートにまとめよう', description: '予想・実験・結果・わかったことの順で、実験レポートを書こう。', estimatedTime: 30, prerequisites: ['t_08'] },
+        { id: 't_10', category: 'まとめる', type: 'must', format: 'teacher', step: 'Step 6', title: '【終末】結果の共有・ふりかえり', description: '実験の結果をクラスで共有し、単元をふりかえる。', estimatedTime: 15, prerequisites: [] }
+      ]
+    }
+  }
+];
+
+/** [HTML生成] テンプレート選択カード（単元管理モーダル内） */
+function renderUnitTemplateCards() {
+  return UNIT_TEMPLATES.map((tpl, idx) => {
+    const info = tpl.data.unitInfo;
+    const mustCount = tpl.data.tasks.filter(t => t.type === 'must').length;
+    const challengeCount = tpl.data.tasks.filter(t => t.type === 'challenge').length;
+    return `
+      <div class="col-12 col-md-6">
+        <div class="card h-100 shadow-sm border-0 rounded-4">
+          <div class="card-body d-flex flex-column">
+            <div class="d-flex align-items-center mb-2">
+              <span class="badge bg-${escapeHtml(tpl.color)} me-2"><i class="bi ${escapeHtml(tpl.icon)} me-1" aria-hidden="true"></i>${escapeHtml(tpl.badge)}</span>
+              <span class="badge bg-light text-secondary border">${escapeHtml(String(info.totalHours))}時間</span>
+            </div>
+            <h6 class="fw-bold mb-1">${escapeHtml(info.unitName)}</h6>
+            <p class="small text-muted flex-grow-1 mb-2">${escapeHtml(tpl.summary)}</p>
+            <div class="x-small text-muted mb-2">必修 ${mustCount}・選択 ${challengeCount} の課題入り</div>
+            <button class="btn btn-outline-primary btn-sm rounded-pill" onclick="createUnitFromTemplate(${idx})">
+              <i class="bi bi-magic me-1" aria-hidden="true"></i>この単元をつくる
+            </button>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+/** [アクション] テンプレートから単元を作成（importUnitJson を再利用） */
+function createUnitFromTemplate(idx) {
+  const tpl = UNIT_TEMPLATES[idx];
+  if (!tpl) return;
+  const title = tpl.data.unitInfo.unitName;
+
+  Swal.fire({
+    title: 'この単元をつくりますか？',
+    html: `<div class="text-start small">「<b>${escapeHtml(title)}</b>」（全${escapeHtml(String(tpl.data.unitInfo.totalHours))}時間・課題${tpl.data.tasks.length}件）を作成します。<br>作成後、設計ビューで自由に編集できます。</div>`,
+    icon: 'question',
+    showCancelButton: true,
+    confirmButtonText: 'つくる',
+    cancelButtonText: 'やめる'
+  }).then(r => {
+    // この確認ダイアログで単元管理モーダルは閉じている（SweetAlert2 は同時に1つ）。
+    // やめた場合はテンプレート一覧へ戻す。
+    if (!r.isConfirmed) { openUnitManagerModal(); return; }
+    showLoading();
+    runTeacher('importUnitJson', [JSON.stringify(tpl.data)],
+      d => {
+        if (d.success) {
+          google.script.run.withSuccessHandler(dataRes => {
+            updateDataStore(dataRes.json);
+            if (appState.unitList.length > 0) {
+              changeUnit(appState.unitList[0].id);
+              renderUnitSelector();
+            }
+            appState.view.teacher = 'design'; // すぐ中身を確かめられるよう設計ビューへ
+            renderTeacherView();
+            hideLoading();
+            Swal.fire('作成しました', `「${escapeHtml(title)}」を作成しました。設計ビューで内容を確認・編集できます。`, 'success');
+          }).withFailureHandler(handleError).getData();
+        } else { handleError({ message: d.error }); }
+      },
+      handleError);
+  });
+}
+
+/**
+ * [検証] AIインポート用JSONの内容チェック。
+ * JSON.parse が通っても構造が違うとサーバー側で分かりにくいエラーになるため、
+ * 何が足りないかを先生に日本語で具体的に伝える。
+ * @returns {string[]} 問題点のリスト（空なら合格）
+ */
+function validateUnitJson(data) {
+  const errors = [];
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    errors.push('全体が { } で囲まれたデータではありません');
+    return errors;
+  }
+  if (!data.unitInfo || typeof data.unitInfo !== 'object') {
+    errors.push('unitInfo（単元情報）がありません');
+  } else if (!data.unitInfo.unitName && !data.unitInfo.title) {
+    errors.push('unitInfo に unitName（単元名）がありません');
+  }
+  if (!Array.isArray(data.tasks) || data.tasks.length === 0) {
+    errors.push('tasks（課題の配列）が空です');
+  } else {
+    const seen = new Set();
+    data.tasks.forEach((t, i) => {
+      if (!t || typeof t !== 'object') { errors.push(`${i + 1}番目の課題がデータの形になっていません`); return; }
+      if (!t.title) errors.push(`${i + 1}番目の課題に title（タスク名）がありません`);
+      if (t.id) {
+        if (seen.has(t.id)) errors.push(`課題ID「${t.id}」が重複しています`);
+        seen.add(t.id);
+      }
+    });
+  }
+  return errors;
 }
 
 function submitCreateUnit() {
@@ -1816,8 +2050,10 @@ function copyPrompt() {
   const btn = document.querySelector('button[onclick="copyPrompt()"]');
   const originHTML = btn.innerHTML;
   btn.innerHTML = '<i class="bi bi-check"></i> コピーしました！';
-  btn.classList.replace('btn-outline-primary', 'btn-success');
-  setTimeout(() => { btn.innerHTML = originHTML; btn.classList.replace('btn-success', 'btn-outline-primary'); }, 2000);
+  // ボタンの実クラスは btn-primary（以前は btn-outline-primary を replace しようとして
+  // 何も起きていなかった）。
+  btn.classList.replace('btn-primary', 'btn-success');
+  setTimeout(() => { btn.innerHTML = originHTML; btn.classList.replace('btn-success', 'btn-primary'); }, 2000);
 }
 
 function saveCustomPrompt() {
@@ -1826,16 +2062,35 @@ function saveCustomPrompt() {
 }
 
 function resetCustomPrompt() {
-  if(confirm('プロンプトを初期値に戻しますか？')) {
-    document.getElementById('prompt-area').value = DEFAULT_AI_PROMPT;
-  }
+  // ※ この関数は単元管理モーダル（SweetAlert2）の中から呼ばれるため、
+  //    Swal.fire を重ねるとモーダル自体が閉じてしまう。確認だけ native confirm を使う。
+  if (!confirm('プロンプトを初期値に戻しますか？（編集した内容は失われ、初期値が保存されます）')) return;
+  const area = document.getElementById('prompt-area');
+  if (area) area.value = DEFAULT_AI_PROMPT;
+  // 画面の値を戻すだけでは次に開いたとき保存済みの古い内容が復活するため、サーバーへも保存する
+  runTeacher('saveCustomAiPrompt', [DEFAULT_AI_PROMPT], () => showToast('success', 'プロンプトを初期値に戻しました'), handleError);
 }
 
 function submitImportJson() {
-  const jsonStr = document.getElementById('json-input').value;
+  let jsonStr = document.getElementById('json-input').value.trim();
   if (!jsonStr) return;
+  // AIの回答をそのまま貼ると ```json ～ ``` のコードフェンスが混ざりやすいので取り除く
+  jsonStr = jsonStr.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+
   // このモーダルは確認ボタン非表示のため showValidationMessage は使えない
-  try { JSON.parse(jsonStr); } catch(e) { showToast('error', 'JSON形式が正しくありません'); return; }
+  let parsed;
+  try { parsed = JSON.parse(jsonStr); } catch(e) { showToast('error', 'JSON形式が正しくありません（{ から } までを丸ごと貼り付けてください）'); return; }
+
+  // 形式チェック：足りない項目を日本語で具体的に知らせる
+  const problems = validateUnitJson(parsed);
+  if (problems.length > 0) {
+    Swal.fire({
+      title: 'データに不足があります',
+      html: `<div class="text-start small"><ul class="mb-0">${problems.map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul><p class="mt-2 mb-0 text-muted">AIに「この形式で出力し直して」と伝えると直ることが多いです。</p></div>`,
+      icon: 'warning'
+    });
+    return;
+  }
 
   showLoading();
   runTeacher('importUnitJson', [jsonStr],
