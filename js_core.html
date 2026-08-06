@@ -120,7 +120,8 @@ let appState = {
   mode: 'student', // 現在のモード ('student' または 'teacher')
   user: {
     name: "",      // ログイン中の名前
-    classId: ""    // ログイン中のクラス
+    classId: "",   // ログイン中のクラス
+    key: ""        // 自分の正準キー（サーバーの getStudentProgress が返す myKey）
   },
   view: {
     student: 'daily',   // 生徒の表示 ('daily':今日の課題, 'planning':計画, 'portfolio':ポートフォリオ, 'plaza':ひろば)
@@ -756,6 +757,40 @@ var MiraiShared = (function () {
 // 既存コードとの互換のため、共通ヘルパーをグローバルへ橋渡しする。
 var escUrl = MiraiShared.escUrl;
 var escJs = MiraiShared.escJs;
+
+// =============================================================
+//  児童の正準キー（サーバーの studentKey() と同じ規則）
+// =============================================================
+// クラス集計（clsProgress / clsFeedback / clsPlans / clsReflections /
+// clsPortfolios / clsMyTasks）はすべてこのキーで引く。
+//   ・本人メールが分かる → メールがキー
+//   ・分からない         → 'name:' + 表示名
+function studentKeyOf(sid, name) {
+  const s = String(sid || '').trim();
+  return s ? s : 'name:' + String(name || '');
+}
+
+// キーから本人メール（studentId）を取り出す。名前フォールバックのキーなら空文字。
+function sidFromKey(key) {
+  const k = String(key || '');
+  return k.indexOf('name:') === 0 ? '' : k;
+}
+
+/**
+ * 名簿の1人分から正準キーを解決する。
+ * ①名簿にメールがあればそれ（最も確実）
+ * ②無ければ、ログイン記録（LiveStatus）から同名・同クラスの本人IDを探す
+ * ③どちらも無ければ名前フォールバック
+ * ②は同名児童がいると先勝ちになるため、名簿へのメール入力を推奨（名簿画面に列あり）。
+ */
+function resolveStudentKey(rosterEntry) {
+  if (!rosterEntry) return 'name:';
+  if (rosterEntry.studentId) return String(rosterEntry.studentId);
+  const live = (dataStore.liveStatus || []).find(s =>
+    s.name === rosterEntry.name && (!rosterEntry.classId || !s.classId || s.classId === rosterEntry.classId));
+  if (live && live.id) return String(live.id);
+  return 'name:' + String(rosterEntry.name || '');
+}
 
 // ステップ文字列 ("Step 1") から数値 (1) を取り出す
 function getStepNumber(stepStr) {

@@ -142,10 +142,13 @@ function loginStudent(isAuto) {
         dataStore.myTasks = d.myTasks || []; // 自分の「マイタスク」
         dataStore.portfolioData = d.portfolio || { summary: '' };
         dataStore.studentReflections = d.reflections?.[appState.unit.id] || {};
-        
-        // 学習計画データ
+
+        // 自分の正準キー（クラス集計から自分の分を見分けるのに使う）
+        appState.user.key = d.myKey || studentKeyOf('', appState.user.name);
+
+        // 学習計画データ（クラス集計と同じ正準キーで持つ）
         if (d.plans && d.plans[appState.unit.id]) {
-           dataStore.clsPlans[appState.user.name] = { [appState.unit.id]: d.plans[appState.unit.id] };
+           dataStore.clsPlans[appState.user.key] = { [appState.unit.id]: d.plans[appState.unit.id] };
         }
         
         syncStudentPlan();      // 計画データの整合性チェック
@@ -721,9 +724,9 @@ function refreshGalleryData() {
       if (d.plans) dataStore.clsPlans = d.plans;
       if (d.myTasks) dataStore.clsMyTasks = d.myTasks;
       // 自分の計画は手元の編集が最新なので上書きしない
-      if (appState.user.name && dataStore.studentPlan) {
-        if (!dataStore.clsPlans[appState.user.name]) dataStore.clsPlans[appState.user.name] = {};
-        dataStore.clsPlans[appState.user.name][appState.unit.id] = dataStore.studentPlan;
+      if (appState.user.key && dataStore.studentPlan) {
+        if (!dataStore.clsPlans[appState.user.key]) dataStore.clsPlans[appState.user.key] = {};
+        dataStore.clsPlans[appState.user.key][appState.unit.id] = dataStore.studentPlan;
       }
       if (appState.mode === 'student' && appState.view.student === 'gallery') renderGalleryWalk();
     })
@@ -752,11 +755,15 @@ function renderGalleryWalk() {
   let cardsHtml = '';
   
   students.forEach((s, idx) => {
-    // 自分はスキップ（自分の画面で見ているので）
-    if (s.name === appState.user.name) return;
+    // 計画は正準キーで引く（名簿のメール → ログイン記録 → 名前 の順で解決）
+    const key = resolveStudentKey(s);
+
+    // 自分はスキップ（自分の画面で見ているので）。キーで判定するため、
+    // 名簿にメールが入っていれば同名の友だちを巻き込んでスキップしない。
+    if (key === appState.user.key || (!sidFromKey(key) && s.name === appState.user.name)) return;
 
     const displayName = isGalleryAnonymous ? `おともだち ${s.number}` : s.name;
-    const plan = (dataStore.clsPlans[s.name] && dataStore.clsPlans[s.name][unitId]) ? dataStore.clsPlans[s.name][unitId] : null;
+    const plan = (dataStore.clsPlans[key] && dataStore.clsPlans[key][unitId]) ? dataStore.clsPlans[key][unitId] : null;
     
     let planContentHtml = '';
     
@@ -1099,7 +1106,7 @@ function changeStudentTotalHours(delta) {
 
 // 計画データの同期（初期化）
 function syncStudentPlan() { 
-  const plans = dataStore.clsPlans[appState.user.name] || {}; 
+  const plans = dataStore.clsPlans[appState.user.key || 'name:' + appState.user.name] || {};
   const currentPlan = plans[appState.unit.id] || {}; 
   
   if (!currentPlan._meta) {
@@ -1361,15 +1368,17 @@ function openDailyReflectionModal(targetHour = null) {
 
 /**
  * [モーダル] ポートフォリオ（単元のまとめ・グラフ）
- * @param {string} name - 対象の生徒名
+ * @param {string} key - 対象児童の正準キー（先生用）。本人表示のときは未使用
  * @param {boolean} isTeacher - 先生が他の生徒のデータを見る場合 true
- *   （クラス全体データ clsReflections / clsPortfolios から取得する）
+ *   （クラス全体データ clsReflections / clsPortfolios から正準キーで取得する）
+ * @param {string} [displayName] - 画面に出す表示名（先生用）
  */
-function renderPortfolioModal(name, isTeacher = false) {
+function renderPortfolioModal(key, isTeacher = false, displayName = '') {
+  const name = isTeacher ? (displayName || key) : appState.user.name;
   let reflections, pfData;
   if (isTeacher) {
-    reflections = (dataStore.clsReflections[name] && dataStore.clsReflections[name][appState.unit.id]) || {};
-    const rawPf = (dataStore.clsPortfolios[name] && dataStore.clsPortfolios[name][appState.unit.id]) || {};
+    reflections = (dataStore.clsReflections[key] && dataStore.clsReflections[key][appState.unit.id]) || {};
+    const rawPf = (dataStore.clsPortfolios[key] && dataStore.clsPortfolios[key][appState.unit.id]) || {};
     pfData = (typeof rawPf === 'object') ? rawPf : { summary: rawPf, feedback: "", stamp: "" };
   } else {
     reflections = dataStore.studentReflections || {};

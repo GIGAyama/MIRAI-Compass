@@ -468,8 +468,10 @@ function fetchTeacherProgressSnapshot() {
 function getFilteredStudents() {
   const classId = appState.view.teacherClassId;
   const live = Array.isArray(dataStore.liveStatus) ? dataStore.liveStatus : [];
-  // dataStore.liveStatus への参照をそのまま返さない（呼び出し側の sort 等で元データを壊さないため）
-  const base = (classId === 'All') ? live.slice() : live.filter(s => s.classId === classId);
+  // dataStore.liveStatus への参照をそのまま返さない（呼び出し側の sort 等で元データを壊さないため）。
+  // 各児童に正準キー（key）を付けて返す。集計データ（clsProgress 等）はこの key で引く。
+  const base = (classId === 'All' ? live.slice() : live.filter(s => s.classId === classId))
+    .map(s => Object.assign({}, s, { key: studentKeyOf(s.id, s.name) }));
 
   // 名簿（在籍中）にいるがまだ一度もログインしていない児童も一覧に出す。
   // liveStatus に無い在籍児童を、待機状態として補う。
@@ -480,7 +482,7 @@ function getFilteredStudents() {
     if (classId !== 'All' && r.classId !== classId) return;
     if (seen.has(r.name)) return;
     seen.add(r.name);
-    base.push({ name: r.name, classId: r.classId, number: r.number, mode: '通常', task: '-' });
+    base.push({ name: r.name, classId: r.classId, number: r.number, mode: '通常', task: '-', key: resolveStudentKey(r) });
   });
   return base;
 }
@@ -500,10 +502,9 @@ function updateLiveViews() {
   // LIVEビューの場合
   if (appState.view.teacher === 'cards') {
     students.forEach(s => {
-      // id は生成時に escapeHtml した文字列で作られるため、& や引用符を含む名前だと
-      // getElementById の生文字列と一致しなくなる。座席表と同じ data-name + CSS.escape 方式で引く。
-      const nameSel = (window.CSS && CSS.escape) ? CSS.escape(s.name) : String(s.name).replace(/["\\\]]/g, '\\$&');
-      const card = document.querySelector(`.live-card[data-name="${nameSel}"]`);
+      // 正準キー（data-key）で引く。同名児童がいてもそれぞれのカードが正しく更新される。
+      const keySel = (window.CSS && CSS.escape) ? CSS.escape(s.key) : String(s.key).replace(/["\\\]]/g, '\\$&');
+      const card = document.querySelector(`.live-card[data-key="${keySel}"]`);
       if (card) {
         const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
         const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
@@ -534,8 +535,8 @@ function updateLiveViews() {
     const canvas = document.getElementById('seating-canvas');
     if (canvas) {
       students.forEach(s => {
-        const nameSel = (window.CSS && CSS.escape) ? CSS.escape(s.name) : String(s.name).replace(/["\\\]]/g, '\\$&');
-        const card = canvas.querySelector(`.seat-card[data-name="${nameSel}"]`);
+        const keySel = (window.CSS && CSS.escape) ? CSS.escape(s.key) : String(s.key).replace(/["\\\]]/g, '\\$&');
+        const card = canvas.querySelector(`.seat-card[data-key="${keySel}"]`);
         if (card) {
           const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
           const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
@@ -577,7 +578,7 @@ function renderLiveCards(container, students) {
 
       return `
       <div class="col">
-        <div data-name="${escapeHtml(s.name)}" class="live-card card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}" style="opacity: ${opacity}">
+        <div data-key="${escapeHtml(s.key)}" class="live-card card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}" style="opacity: ${opacity}">
           <div class="fw-bold text-truncate mb-2">${escapeHtml(s.name)}</div>
           <i class="bi bi-person-circle fs-1 my-2 ${isSos ? 'text-danger' : (isFocus ? 'text-info' : 'text-secondary')}"></i>
           <div class="small text-muted text-truncate task-text">${taskDisplay}</div>
@@ -602,8 +603,8 @@ function renderHeatmap(container, students) {
     return;
   }
 
-  const studentNames = students.map(s => s.name).sort();
-  if (studentNames.length === 0) {
+  const sortedStudents = students.slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'ja'));
+  if (sortedStudents.length === 0) {
     container.innerHTML = teacherEmptyState('bi-people', 'まだ児童がいません',
       '名簿を登録すると、児童ごとの進捗がここに一覧表示されます。',
       `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿を登録する</button>`);
@@ -612,28 +613,29 @@ function renderHeatmap(container, students) {
 
   let h = `<div class="table-responsive mb-4"><table class="table table-borderless heatmap-table"><thead><tr><th style="min-width:100px;text-align:left">名前</th>${currentTasks.map((t, i) => `<th role="button" tabindex="0" title="${escapeHtml(t.title)}" onclick="showTeacherTaskDetailSimple('${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); showTeacherTaskDetailSimple('${escJs(t.taskId)}');}">${t.step ? t.step.replace(/[^0-9]/g, '') : i + 1}</th>`).join('')}</tr></thead><tbody>`;
   
-  studentNames.forEach(n => {
-    const st = dataStore.liveStatus.find(d => d.name === n);
-    const isSos = st && (st.mode === 'たすけて' || st.mode === 'sos');
-    const isFocus = st && (st.mode === 'しゅうちゅう' || st.mode === 'focus');
+  sortedStudents.forEach(s => {
+    const n = s.name;
+    const key = s.key;
+    const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
+    const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
     const ic = isSos ? '<i class="bi bi-exclamation-circle-fill text-danger ms-1 animate__animated animate__flash"></i>' : (isFocus ? '<i class="bi bi-lightning-fill text-info ms-1"></i>' : '');
-    
-    // 生徒名クリックでポートフォリオ表示
-    h += `<tr><td class="text-start fw-bold text-truncate" role="button" tabindex="0" style="max-width:120px;cursor:pointer;text-decoration:underline" onclick="renderPortfolioModal('${escJs(n)}', true)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); renderPortfolioModal('${escJs(n)}', true);}">${escapeHtml(n)}${ic}</td>`;
-    
+
+    // 生徒名クリックでポートフォリオ表示（正準キーで本人のデータを引く）
+    h += `<tr><td class="text-start fw-bold text-truncate" role="button" tabindex="0" style="max-width:120px;cursor:pointer;text-decoration:underline" onclick="renderPortfolioModal('${escJs(key)}', true, '${escJs(n)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); renderPortfolioModal('${escJs(key)}', true, '${escJs(n)}');}">${escapeHtml(n)}${ic}</td>`;
+
     currentTasks.forEach(t => {
-      const p = (dataStore.clsProgress[n] && dataStore.clsProgress[n][t.taskId]) || {};
-      const stamp = (dataStore.clsFeedback[n] && dataStore.clsFeedback[n][t.taskId]);
-      
+      const p = (dataStore.clsProgress[key] && dataStore.clsProgress[key][t.taskId]) || {};
+      const stamp = (dataStore.clsFeedback[key] && dataStore.clsFeedback[key][t.taskId]);
+
       let cls = "", icon = "";
       if (p.status === '完了') cls = "heatmap-done";
       else if (p.status === '途中') cls = "heatmap-doing";
       else if (isSos) cls = "heatmap-sos"; // SOS中は未完了セルを点滅させる
       else if (isFocus) cls = "heatmap-focus";
-      
+
       if (stamp) { if(stamp==='check') icon='✅'; if(stamp==='good') icon='👍'; if(stamp==='great') icon='💮'; if(stamp==='support') icon='🚩'; }
-      
-      h += `<td><div class="heatmap-cell-wrapper" role="button" tabindex="0" onclick="showStudentTaskDetail('${escJs(n)}', '${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); showStudentTaskDetail('${escJs(n)}', '${escJs(t.taskId)}');}"><div class="heatmap-cell ${cls}" title="${escapeHtml(t.title)}">${icon}</div></div></td>`;
+
+      h += `<td><div class="heatmap-cell-wrapper" role="button" tabindex="0" onclick="showStudentTaskDetail('${escJs(key)}', '${escJs(n)}', '${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); showStudentTaskDetail('${escJs(key)}', '${escJs(n)}', '${escJs(t.taskId)}');}"><div class="heatmap-cell ${cls}" title="${escapeHtml(t.title)}">${icon}</div></div></td>`;
     });
     h += '</tr>';
   });
@@ -678,7 +680,7 @@ function renderSeatingView(container) {
   const COLS = 6;
   const slotKey = (px, py) => Math.round((px - 10) / GRID) + ',' + Math.round((py - 10) / GRID);
   const occupied = new Set(students.filter(s => s.x || s.y).map(s => slotKey(s.x, s.y)));
-  const autoPos = new Map();
+  const autoPos = new Map(); // 正準キー → 座標（同名児童がいても別のマスに置く）
   let slot = 0;
   students
     .filter(s => !s.x && !s.y)
@@ -688,12 +690,12 @@ function renderSeatingView(container) {
       const px = (slot % COLS) * GRID + 10;
       const py = Math.floor(slot / COLS) * GRID + 10;
       occupied.add((slot % COLS) + ',' + Math.floor(slot / COLS));
-      autoPos.set(s.name, { x: px, y: py });
+      autoPos.set(s.key, { x: px, y: py });
       slot++;
     });
 
   students.forEach(s => {
-    const auto = autoPos.get(s.name);
+    const auto = autoPos.get(s.key);
     const x = s.x || (auto ? auto.x : 50);
     const y = s.y || (auto ? auto.y : 50);
     const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
@@ -705,6 +707,7 @@ function renderSeatingView(container) {
     card.style.top = y + 'px';
     card.style.width = '100px';
     card.setAttribute('data-name', s.name);
+    card.setAttribute('data-key', s.key); // 保存・更新は正準キーで行う（同名児童の混線防止）
     
     card.innerHTML = `
       <div class="card-body p-2 text-center" style="cursor: move;" onmousedown="startDragSeat(event, this)" ontouchstart="startDragSeat(event, this)">
@@ -833,20 +836,22 @@ function saveSeating() {
   const cards = document.querySelectorAll('.seat-card');
   const coords = [];
   cards.forEach(c => {
+    const key = c.getAttribute('data-key') || '';
     coords.push({
       name: c.getAttribute('data-name'),
+      studentId: sidFromKey(key), // あれば本人IDで行を特定（同名児童の座席が混ざらない）
       x: parseInt(c.style.left, 10),
       y: parseInt(c.style.top, 10)
     });
   });
-  
+
   runTeacher('saveSeatCoordinates', [coords],
     () => {
       showToast('success', '座席配置を保存しました');
 
       // [追加] ローカルのデータストアも更新して、タブ切り替え等でリセットされないようにする
       coords.forEach(c => {
-        const student = dataStore.liveStatus.find(s => s.name === c.name);
+        const student = dataStore.liveStatus.find(s => c.studentId ? s.id === c.studentId : s.name === c.name);
         if (student) {
           student.x = c.x;
           student.y = c.y;
@@ -871,15 +876,15 @@ function saveSeating() {
 
 // まとめビューの「書きかけフィードバック」置き場。
 // ビュー・クラスタブの切り替えは画面全体を作り直すため、そのままだと
-// 入力途中のコメントが黙って消えていた。名前をキーに下書きを持ち、再描画時に復元する。
+// 入力途中のコメントが黙って消えていた。正準キーで下書きを持ち、再描画時に復元する。
 // 保存が成功した分だけ消す。
 let summaryDrafts = {};
 
 /** [アクション] まとめビューの入力を下書きとして覚える（oninput/onchange から呼ぶ） */
-function storeSummaryDraft(studentName, uniqueId) {
+function storeSummaryDraft(studentKey, uniqueId) {
   const commentInput = document.getElementById(`fb-text-${uniqueId}`);
   const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
-  summaryDrafts[studentName] = {
+  summaryDrafts[studentKey] = {
     feedback: commentInput ? commentInput.value : '',
     stamp: stampEl ? stampEl.value : ''
   };
@@ -905,25 +910,25 @@ function renderSummaryListView(container) {
 
   let tableRows = '';
   students.forEach((s, index) => {
-    // ポートフォリオデータ取得
+    // ポートフォリオデータ取得（正準キーで本人の分だけを引く）
     let pf = {};
-    if (dataStore.clsPortfolios && dataStore.clsPortfolios[s.name] && dataStore.clsPortfolios[s.name][appState.unit.id]) {
-      const rawPf = dataStore.clsPortfolios[s.name][appState.unit.id];
+    if (dataStore.clsPortfolios && dataStore.clsPortfolios[s.key] && dataStore.clsPortfolios[s.key][appState.unit.id]) {
+      const rawPf = dataStore.clsPortfolios[s.key][appState.unit.id];
       pf = (typeof rawPf === 'object') ? rawPf : { summary: rawPf, feedback: "", stamp: "" };
     }
     const summary = pf.summary || "";
     // 書きかけの下書きがあれば、保存済みの値より優先して復元する
-    const draft = summaryDrafts[s.name];
+    const draft = summaryDrafts[s.key];
     const feedback = draft ? draft.feedback : (pf.feedback || "");
     const stamp = draft ? draft.stamp : (pf.stamp || "");
-    const pfStudentId = pf.studentId || ""; // 本人メール（あれば本人の行にフィードバックを着地させる）
+    const pfStudentId = pf.studentId || sidFromKey(s.key); // 本人メール（あれば本人の行にフィードバックを着地させる）
 
     // スキル集計
     const skillCounts = {};
     SKILL_DEFINITIONS.forEach(def => skillCounts[def.id] = 0);
-    
-    if (dataStore.clsReflections && dataStore.clsReflections[s.name] && dataStore.clsReflections[s.name][appState.unit.id]) {
-      const reflections = dataStore.clsReflections[s.name][appState.unit.id];
+
+    if (dataStore.clsReflections && dataStore.clsReflections[s.key] && dataStore.clsReflections[s.key][appState.unit.id]) {
+      const reflections = dataStore.clsReflections[s.key][appState.unit.id];
       Object.values(reflections).forEach(r => {
         if (r.skills && Array.isArray(r.skills)) {
           r.skills.forEach(sid => { if (skillCounts[sid] !== undefined) skillCounts[sid]++; });
@@ -947,7 +952,7 @@ function renderSummaryListView(container) {
       <tr>
         <td class="st-col-name text-center text-muted small align-middle">${index + 1}</td>
         <td class="st-col-name align-middle">
-          <div class="fw-bold text-primary" style="cursor:pointer;" onclick="renderPortfolioModal('${escJs(s.name)}', true)">
+          <div class="fw-bold text-primary" style="cursor:pointer;" onclick="renderPortfolioModal('${escJs(s.key)}', true, '${escJs(s.name)}')">
             ${escapeHtml(s.name)} <i class="bi bi-box-arrow-up-right small ms-1 text-muted"></i>
           </div>
         </td>
@@ -961,14 +966,14 @@ function renderSummaryListView(container) {
         </td>
         <td class="st-col-feedback align-middle">
           <div class="stamp-select-group">
-            <label><input type="radio" name="stamp-${uniqueId}" value="check" class="stamp-input" ${stamp==='check'?'checked':''} onchange="storeSummaryDraft('${escJs(s.name)}', '${uniqueId}')"><span class="stamp-option" title="確認">✅</span></label>
-            <label><input type="radio" name="stamp-${uniqueId}" value="good" class="stamp-input" ${stamp==='good'?'checked':''} onchange="storeSummaryDraft('${escJs(s.name)}', '${uniqueId}')"><span class="stamp-option" title="いいね">👍</span></label>
-            <label><input type="radio" name="stamp-${uniqueId}" value="great" class="stamp-input" ${stamp==='great'?'checked':''} onchange="storeSummaryDraft('${escJs(s.name)}', '${uniqueId}')"><span class="stamp-option" title="すばらしい">💮</span></label>
-            <label><input type="radio" name="stamp-${uniqueId}" value="support" class="stamp-input" ${stamp==='support'?'checked':''} onchange="storeSummaryDraft('${escJs(s.name)}', '${uniqueId}')"><span class="stamp-option" title="応援">🚩</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="check" class="stamp-input" ${stamp==='check'?'checked':''} onchange="storeSummaryDraft('${escJs(s.key)}', '${uniqueId}')"><span class="stamp-option" title="確認">✅</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="good" class="stamp-input" ${stamp==='good'?'checked':''} onchange="storeSummaryDraft('${escJs(s.key)}', '${uniqueId}')"><span class="stamp-option" title="いいね">👍</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="great" class="stamp-input" ${stamp==='great'?'checked':''} onchange="storeSummaryDraft('${escJs(s.key)}', '${uniqueId}')"><span class="stamp-option" title="すばらしい">💮</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="support" class="stamp-input" ${stamp==='support'?'checked':''} onchange="storeSummaryDraft('${escJs(s.key)}', '${uniqueId}')"><span class="stamp-option" title="応援">🚩</span></label>
           </div>
           <div class="input-group input-group-sm">
-            <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${escapeHtml(feedback)}" oninput="storeSummaryDraft('${escJs(s.name)}', '${uniqueId}')">
-            <button id="btn-save-${uniqueId}" class="btn ${draft ? 'btn-warning' : 'btn-primary'}" onclick="saveListFeedback('${escJs(s.name)}', '${uniqueId}', '${escJs(pfStudentId)}')">保存</button>
+            <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${escapeHtml(feedback)}" oninput="storeSummaryDraft('${escJs(s.key)}', '${uniqueId}')">
+            <button id="btn-save-${uniqueId}" class="btn ${draft ? 'btn-warning' : 'btn-primary'}" onclick="saveListFeedback('${escJs(s.key)}', '${escJs(s.name)}', '${uniqueId}', '${escJs(pfStudentId)}')">保存</button>
           </div>
         </td>
       </tr>`;
@@ -1000,7 +1005,7 @@ function renderSummaryListView(container) {
     </div>`;
 }
 
-function saveListFeedback(studentName, uniqueId, studentId) {
+function saveListFeedback(studentKey, studentName, uniqueId, studentId) {
   const comment = document.getElementById(`fb-text-${uniqueId}`).value;
   const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
   const stamp = stampEl ? stampEl.value : "";
@@ -1011,15 +1016,15 @@ function saveListFeedback(studentName, uniqueId, studentId) {
   btn.innerHTML = '...';
 
   // サーバーへ保存（studentId があれば本人の行に着地。無ければサーバー側で studentName にフォールバック）
-  runTeacher('savePortfolioFeedback', [studentName, appState.unit.id, comment, stamp, studentId || ''],
+  runTeacher('savePortfolioFeedback', [studentName, appState.unit.id, comment, stamp, studentId || sidFromKey(studentKey)],
     () => {
       showToast('success', '保存しました');
       // 保存できたので下書きを消し、ローカルデータにも反映（再描画時に保存済みの値が出る）
-      delete summaryDrafts[studentName];
-      if (dataStore.clsPortfolios && dataStore.clsPortfolios[studentName] && dataStore.clsPortfolios[studentName][appState.unit.id]) {
-        dataStore.clsPortfolios[studentName][appState.unit.id].feedback = comment;
-        dataStore.clsPortfolios[studentName][appState.unit.id].stamp = stamp;
-      }
+      delete summaryDrafts[studentKey];
+      if (!dataStore.clsPortfolios[studentKey]) dataStore.clsPortfolios[studentKey] = {};
+      if (!dataStore.clsPortfolios[studentKey][appState.unit.id]) dataStore.clsPortfolios[studentKey][appState.unit.id] = { summary: '', feedback: '', stamp: '', studentId: sidFromKey(studentKey) };
+      dataStore.clsPortfolios[studentKey][appState.unit.id].feedback = comment;
+      dataStore.clsPortfolios[studentKey][appState.unit.id].stamp = stamp;
       btn.disabled = false;
       btn.innerHTML = originalText;
       btn.classList.remove('btn-warning');
@@ -1046,14 +1051,15 @@ function saveAllListFeedbacks() {
     const uniqueId = `pf-${index}`;
     const commentInput = document.getElementById(`fb-text-${uniqueId}`);
     const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
-    
+
     if (commentInput) {
       // 本人メール（あれば）を添えて、先生フィードバックを本人の行へ確実に着地させる。
-      let sid = "";
-      if (dataStore.clsPortfolios && dataStore.clsPortfolios[s.name] && dataStore.clsPortfolios[s.name][appState.unit.id]) {
-        sid = dataStore.clsPortfolios[s.name][appState.unit.id].studentId || "";
+      let sid = sidFromKey(s.key);
+      if (!sid && dataStore.clsPortfolios && dataStore.clsPortfolios[s.key] && dataStore.clsPortfolios[s.key][appState.unit.id]) {
+        sid = dataStore.clsPortfolios[s.key][appState.unit.id].studentId || "";
       }
       feedbackList.push({
+        studentKey: s.key,
         studentName: s.name,
         studentId: sid,
         unitId: appState.unit.id,
@@ -1069,10 +1075,10 @@ function saveAllListFeedbacks() {
       // 全員分が保存できたので下書きを消し、ローカルデータにも反映する
       summaryDrafts = {};
       feedbackList.forEach(f => {
-        if (dataStore.clsPortfolios && dataStore.clsPortfolios[f.studentName] && dataStore.clsPortfolios[f.studentName][f.unitId]) {
-          dataStore.clsPortfolios[f.studentName][f.unitId].feedback = f.feedback;
-          dataStore.clsPortfolios[f.studentName][f.unitId].stamp = f.stamp;
-        }
+        if (!dataStore.clsPortfolios[f.studentKey]) dataStore.clsPortfolios[f.studentKey] = {};
+        if (!dataStore.clsPortfolios[f.studentKey][f.unitId]) dataStore.clsPortfolios[f.studentKey][f.unitId] = { summary: '', feedback: '', stamp: '', studentId: f.studentId };
+        dataStore.clsPortfolios[f.studentKey][f.unitId].feedback = f.feedback;
+        dataStore.clsPortfolios[f.studentKey][f.unitId].stamp = f.stamp;
       });
       renderSummaryListView(document.getElementById('t-area'));
       btn.disabled = false;
@@ -2527,9 +2533,10 @@ function openRosterManagerModal() {
             <label class="form-label small fw-bold text-muted">
               <i class="bi bi-clipboard"></i> Excel/スプレッドシートから貼り付け
             </label>
-            <textarea id="paste-area" class="form-control flex-grow-1 small" 
-                      placeholder="ここにExcelやスプレッドシートのデータを貼り付けると、自動的に右側の表に取り込まれます。&#13;&#10;&#13;&#10;[番号] [名前] の順だと認識精度が上がります。"
+            <textarea id="paste-area" class="form-control flex-grow-1 small"
+                      placeholder="ここにExcelやスプレッドシートのデータを貼り付けると、自動的に右側の表に取り込まれます。&#13;&#10;&#13;&#10;[番号] [名前] [メール] の順だと認識精度が上がります（メールは任意）。"
                       style="resize: none; font-family: monospace; font-size: 0.85rem;"></textarea>
+            <div class="x-small text-muted mt-1">メール（児童のGoogleアカウント）を入れておくと、同じ名前の児童がいても記録が正確に結びつきます。</div>
           </div>
 
           <!-- 右側：編集グリッド -->
@@ -2540,7 +2547,8 @@ function openRosterManagerModal() {
                   <tr>
                     <th style="width: 60px;" class="text-center">No.</th>
                     <th>氏名</th>
-                    <th style="width: 80px;" class="text-center">在籍</th>
+                    <th style="width: 34%;">メール（任意）</th>
+                    <th style="width: 70px;" class="text-center">在籍</th>
                     <th style="width: 40px;"></th>
                   </tr>
                 </thead>
@@ -2595,9 +2603,10 @@ function loadRosterFromDB() {
     .map(r => ({
       number: r.number || 999,
       name: r.name,
+      studentId: r.studentId || '', // 本人メール（任意）
       isActive: r.isActive !== false // undefined or true -> true
     }));
-  
+
   renderRosterTable();
 }
 
@@ -2610,6 +2619,7 @@ function renderRosterTable() {
     tr.innerHTML = `
       <td><input type="number" class="form-control form-control-sm border-0 p-0 text-center" value="${escapeHtml(student.number)}" onchange="updateRosterData(${index}, 'number', this.value)"></td>
       <td><input type="text" class="form-control form-control-sm border-0 p-0 px-1" value="${escapeHtml(student.name)}" onchange="updateRosterData(${index}, 'name', this.value)"></td>
+      <td><input type="text" class="form-control form-control-sm border-0 p-0 px-1 text-muted" value="${escapeHtml(student.studentId || '')}" placeholder="xxx@school.jp" onchange="updateRosterData(${index}, 'studentId', this.value)"></td>
       <td class="text-center align-middle">
         <div class="form-check form-switch d-flex justify-content-center">
           <input class="form-check-input" type="checkbox" ${student.isActive ? 'checked' : ''} onchange="updateRosterData(${index}, 'isActive', this.checked)" title="${student.isActive?'表示':'非表示(転出)'}">
@@ -2634,6 +2644,7 @@ function renderRosterTable() {
 function updateRosterData(index, field, value) {
   if (field === 'number') rosterEditData[index].number = parseInt(value) || 0;
   if (field === 'name') rosterEditData[index].name = value;
+  if (field === 'studentId') rosterEditData[index].studentId = String(value || '').trim();
   if (field === 'isActive') {
       rosterEditData[index].isActive = value;
       renderRosterTable(); // 色更新のため再描画
@@ -2642,7 +2653,7 @@ function updateRosterData(index, field, value) {
 
 function addRosterRow() {
   const nextNum = rosterEditData.length > 0 ? Math.max(...rosterEditData.map(s=>s.number)) + 1 : 1;
-  rosterEditData.push({ number: nextNum, name: '', isActive: true });
+  rosterEditData.push({ number: nextNum, name: '', studentId: '', isActive: true });
   renderRosterTable();
 }
 
@@ -2689,6 +2700,11 @@ function parsePastedText(text) {
 
     let num = 0;
     let name = "";
+    let email = "";
+
+    // メールらしき列（@ を含む）を先に抜き出す（位置はどこでもよい）
+    const emailIdx = cols.findIndex(c => c.indexOf('@') > 0);
+    if (emailIdx >= 0) { email = cols[emailIdx]; cols.splice(emailIdx, 1); }
 
     // データ解析ロジック
     // パターン1: [番号] [名前] ...
@@ -2708,7 +2724,7 @@ function parsePastedText(text) {
         // 同じ名前はスキップする（同じ表を2回貼ると名簿が倍になる事故の防止）
         if (seen.has(normName(name))) { skippedCount++; return; }
         seen.add(normName(name));
-        rosterEditData.push({ number: num, name: name, isActive: true });
+        rosterEditData.push({ number: num, name: name, studentId: email, isActive: true });
         addedCount++;
     }
   });
@@ -2813,28 +2829,27 @@ function submitSaveRoster() {
 //  8. その他詳細モーダル
 // ==========================================
 
-function showStudentTaskDetail(name, tid) {
+function showStudentTaskDetail(key, name, tid) {
   const t = dataStore.masterTasks.find(x => x.taskId === tid);
   if (!t) return;
-  const p = (dataStore.clsProgress[name] && dataStore.clsProgress[name][tid]) || {};
+  const p = (dataStore.clsProgress[key] && dataStore.clsProgress[key][tid]) || {};
+  const args = `'${escJs(key)}','${escJs(name)}','${escJs(tid)}'`;
   Swal.fire({
     title: `${escapeHtml(name)} さんの状況`,
-    html: `<div class="text-start"><h6 class="fw-bold text-primary">${escapeHtml(t.title)}</h6><div class="mb-3"><span class="badge bg-secondary me-1">状態: ${escapeHtml(p.status||'未')}</span></div><div class="p-3 bg-light rounded mb-3 small">${escapeHtml(p.reflection)||'メモなし'}</div><hr><div class="d-flex justify-content-center gap-2"><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','check')">✅</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','good')">👍</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','great')">💮</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','support')">🚩</button></div></div>`,
+    html: `<div class="text-start"><h6 class="fw-bold text-primary">${escapeHtml(t.title)}</h6><div class="mb-3"><span class="badge bg-secondary me-1">状態: ${escapeHtml(p.status||'未')}</span></div><div class="p-3 bg-light rounded mb-3 small">${escapeHtml(p.reflection)||'メモなし'}</div><hr><div class="d-flex justify-content-center gap-2"><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp(${args},'check')">✅</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp(${args},'good')">👍</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp(${args},'great')">💮</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp(${args},'support')">🚩</button></div></div>`,
     showConfirmButton: false,
     showCloseButton: true
   });
 }
 
-function sendStamp(name, tid, stamp) {
-  if (!dataStore.clsFeedback[name]) dataStore.clsFeedback[name] = {};
-  dataStore.clsFeedback[name][tid] = stamp;
+function sendStamp(key, name, tid, stamp) {
+  if (!dataStore.clsFeedback[key]) dataStore.clsFeedback[key] = {};
+  dataStore.clsFeedback[key][tid] = stamp;
   renderTeacherDashboardContent(); // 更新
   showToast('success', 'スタンプ送信');
-  // 本人ID（ログイン時に記録された Google メール）が分かればスタンプに添える。
-  // 児童側は ID がある行を ID でだけ照合するため、同名児童への誤配を防げる。
-  const live = (dataStore.liveStatus || []).find(d => d.name === name);
-  const studentId = live && live.id ? live.id : '';
-  runTeacher('sendFeedback', [name, tid, stamp, appState.view.teacherClassId !== 'All' ? appState.view.teacherClassId : '', studentId]);
+  // キーが本人メールならスタンプに添える。児童側は ID がある行を ID でだけ
+  // 照合するため、同名児童への誤配を防げる（名前フォールバックのキーは従来動作）。
+  runTeacher('sendFeedback', [name, tid, stamp, appState.view.teacherClassId !== 'All' ? appState.view.teacherClassId : '', sidFromKey(key)]);
 }
 
 /**
