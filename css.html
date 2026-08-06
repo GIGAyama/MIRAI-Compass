@@ -767,6 +767,41 @@ input.form-control[readonly][style*="width: 40px"] { min-width: 44px; }
 /* 座席表・計画づくりは指で動かす面なので、操作中に画面ごと動かない */
 .seating-canvas, .plan-drop-zone-v { touch-action: pan-y; }
 
+/* クエスト系の押しボタンは背景がグラデーションで濃く、既定の青いリングが
+   沈んで見えないことがある。白いふちどり＋青リングの二重にして、
+   どの色の上でもキーボードフォーカスが確実に見えるようにする。 */
+.cq-btn:focus-visible, .cq-door:focus-visible, .cq-today:focus-visible {
+  outline: 3px solid var(--color-primary-d);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px #fff, var(--cq-shadow);
+}
+
+/* =========================================
+   8.5 スケルトン（読み込み中の骨組み表示）
+   =========================================
+   データ待ちの間、白画面やスピナーではなく「もうすぐ出る画面の形」を
+   見せる。シマー（光の帯）は動きを減らす設定では止まる（§9の全体指定が効く）。
+   ========================================= */
+.skl {
+  position: relative;
+  overflow: hidden;
+  background: #e9eef5;
+  border-radius: var(--cq-radius-md);
+}
+.skl::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.65), transparent);
+  animation: skl-shimmer 1.4s infinite;
+}
+.skl-hero { height: 120px; border-radius: var(--cq-radius-lg); }
+.skl-block { height: 80px; }
+@keyframes skl-shimmer {
+  100% { transform: translateX(100%); }
+}
+
 /* =========================================
    9. 動きの配慮（感覚過敏・めまいへの配慮）
    =========================================

@@ -126,8 +126,10 @@ function handleLoginClick() {
  * @param {boolean} isAuto - 自動ログインかどうか（ローディング表示の制御用）
  */
 function loginStudent(isAuto) {
-  if (!isAuto) showLoading();
-  
+  // 白い全画面ローダーで止めず、これから出る画面の「骨組み」を先に見せる
+  // （待ち時間の体感を減らす。大手アプリの標準的な手法）
+  if (!isAuto) renderStudentSkeleton();
+
   // サーバー(Code.gs)の getStudentProgress を呼び出し
   google.script.run
     .withSuccessHandler(res => {
@@ -157,8 +159,33 @@ function loginStudent(isAuto) {
         unlockAudio();          // 音声再生準備
       }
     })
-    .withFailureHandler(handleError)
+    .withFailureHandler(err => {
+      handleError(err);
+      renderNameEntry(); // スケルトンのまま止まらないよう、ログイン画面に戻す
+    })
     .getStudentProgress(appState.user.name, appState.user.classId, appState.unit.id);
+}
+
+/**
+ * [画面描画] 児童画面のスケルトン（読み込み中の骨組み表示）。
+ * データ待ちの間、真っ白ではなく「もうすぐ出る画面の形」を見せる。
+ */
+function renderStudentSkeleton() {
+  const container = document.getElementById('app-container');
+  if (!container) return;
+  container.innerHTML = `
+    <div class="p-3" aria-hidden="true">
+      <div class="skl skl-hero mb-3"></div>
+      <div class="skl skl-block mb-3" style="height:110px"></div>
+      <div class="d-flex gap-2 mb-3">
+        <div class="skl skl-block flex-fill" style="height:72px"></div>
+        <div class="skl skl-block flex-fill" style="height:72px"></div>
+        <div class="skl skl-block flex-fill" style="height:72px"></div>
+      </div>
+      <div class="skl skl-block mb-2" style="height:96px"></div>
+      <div class="skl skl-block mb-2" style="height:96px"></div>
+      <div class="skl skl-block" style="height:96px"></div>
+    </div>`;
 }
 
 // ==========================================
@@ -177,6 +204,8 @@ function renderStudentView() {
     renderStudentPortfolio();
   } else if (view === 'plaza') {
     renderStudentPlaza();
+  } else if (view === 'gallery') {
+    renderGalleryWalk();
   } else {
     renderStudentDaily();
   }
@@ -195,6 +224,10 @@ function renderStudentView() {
  * [画面描画] モード切替（きょう / けいかく / ポートフォリオ / ひろば）
  */
 function setStudentViewMode(mode) {
+  // 計画ビューを離れるとき、デバウンス待ちの保存があれば先に送る（取りこぼし防止）
+  if (appState.view.student === 'planning' && mode !== 'planning' && typeof planSaveTimer !== 'undefined' && planSaveTimer) {
+    flushPlanSave();
+  }
   appState.view.student = mode;
   // 内側スクロールを持つビュー（計画）から戻るときに位置が残らないよう先頭へ
   const main = document.querySelector('main.container');
@@ -562,7 +595,7 @@ function renderStudentDaily() {
       <div class="d-grid gap-2 mt-2 mb-3">
         <button type="button" class="cq-btn cq-btn-ghost cq-btn-block" onclick="openMyTaskModal()"><i class="bi bi-plus-circle-fill" aria-hidden="true"></i>じぶんの かだいを つくる</button>
         <div class="d-flex gap-2">
-          <button type="button" class="cq-btn cq-btn-gold cq-btn-block" onclick="renderGalleryWalk()"><i class="bi bi-grid-3x3-gap-fill" aria-hidden="true"></i>みんなの けいかく</button>
+          <button type="button" class="cq-btn cq-btn-gold cq-btn-block" onclick="setStudentViewMode('gallery')"><i class="bi bi-grid-3x3-gap-fill" aria-hidden="true"></i>みんなの けいかく</button>
           <button type="button" class="cq-btn cq-btn-orange cq-btn-block" onclick="openDailyReflectionModal()"><i class="bi bi-pencil-square" aria-hidden="true"></i>ふりかえり</button>
         </div>
       </div>
@@ -675,7 +708,10 @@ function renderGalleryWalk() {
   const currentTasks = getCurrentUnitTasks();
   // クラス全員のマイタスクも含める（自分のものだけだと友達の計画中のマイタスクが表示されないため）
   const classmateTasks = Object.values(dataStore.clsMyTasks || {}).flat();
-  const allTasks = [...currentTasks, ...dataStore.myTasks, ...classmateTasks];
+  // 35人×8時間×数十タスクの三重ループで毎回 find すると数千回の線形探索になるため、
+  // taskId → タスクの Map を1度だけ作って O(1) で引く。
+  const taskById = new Map();
+  [...currentTasks, ...dataStore.myTasks, ...classmateTasks].forEach(t => { if (!taskById.has(t.taskId)) taskById.set(t.taskId, t); });
   
   // クラス全員の計画データを取得
   // dataStore.clsPlans = { "生徒名": { "unitId": { "1": [ids], "2": [ids]... } } }
@@ -705,7 +741,7 @@ function renderGalleryWalk() {
         let blocksHtml = '';
         
         taskIds.forEach(tid => {
-          const t = allTasks.find(at => at.taskId === tid);
+          const t = taskById.get(tid);
           if (t) {
             // カテゴリごとの色クラス
             let colorClass = 'bg-other';
@@ -890,6 +926,7 @@ function renderStudentPlanning() {
           <span class="cq-hero-badge"><i class="bi bi-clock-fill" aria-hidden="true"></i>ぜんぶで ${effectiveHours}時間</span>
           <button type="button" class="cq-hero-badge" style="border:0;cursor:pointer" onclick="changeStudentTotalHours(1)" aria-label="時間をふやす"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
           <button type="button" class="cq-hero-badge" style="border:0;cursor:pointer" onclick="changeStudentTotalHours(-1)" aria-label="時間をへらす"><i class="bi bi-dash-lg" aria-hidden="true"></i></button>
+          <span id="plan-save-state" class="cq-hero-badge" role="status">${renderPlanSaveStateLabel()}</span>
         </div>
       </div>
       <!-- 100vh はモバイルのアドレスバー分だけはみ出すので dvh を使う。
@@ -964,10 +1001,46 @@ function removeFromPlan(hour, taskId) {
   } 
 }
 
-// サーバーへ計画を保存
+// ------------------------------------
+//  計画の保存（デバウンス + 保存状態の見える化）
+// ------------------------------------
+// ドラッグのたびに即時送信すると、連続操作で保存リクエストが束になって
+// サーバーのロック待ちを起こす。800ms のデバウンスでまとめて1回にする。
+let planSaveTimer = null;
+let planSaveState = 'saved'; // 'saving' | 'saved' | 'error'
+
+function renderPlanSaveStateLabel() {
+  if (planSaveState === 'saving') return `<i class="bi bi-arrow-repeat" aria-hidden="true"></i>ほぞんちゅう…`;
+  if (planSaveState === 'error') return `<i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>ほぞんできてないよ`;
+  return `<i class="bi bi-check-lg" aria-hidden="true"></i>ほぞんずみ`;
+}
+
+function setPlanSaveState(state) {
+  planSaveState = state;
+  const el = document.getElementById('plan-save-state');
+  if (el) el.innerHTML = renderPlanSaveStateLabel();
+}
+
+// サーバーへ計画を保存（デバウンス入口）
 function savePlan() {
+  setPlanSaveState('saving');
+  if (planSaveTimer) clearTimeout(planSaveTimer);
+  planSaveTimer = setTimeout(flushPlanSave, 800);
+}
+
+// 実際の送信（ビューを離れるときにも呼んで、書きかけを取りこぼさない）
+function flushPlanSave() {
+  if (planSaveTimer) { clearTimeout(planSaveTimer); planSaveTimer = null; }
   google.script.run
-    .withFailureHandler(handleError)
+    .withSuccessHandler(res => {
+      if (res && res.success === false) { setPlanSaveState('error'); reportSaveFailure('けいかく'); }
+      else setPlanSaveState('saved');
+    })
+    .withFailureHandler(err => {
+      console.error(err);
+      setPlanSaveState('error');
+      reportSaveFailure('けいかく');
+    })
     .saveStudentPlan(appState.user.name, appState.unit.id, dataStore.studentPlan, appState.user.classId);
 }
 
@@ -1027,9 +1100,8 @@ function submitTaskProgress(taskId, status, btnElement) {
   dataStore.studentProgress[taskId].status = status;
   const mem = dataStore.studentProgress[taskId].reflection || "";
 
-  // サーバーへ送信（保存に成功したら演出する）
-  google.script.run
-    .withFailureHandler(err => console.error(err))
+  // サーバーへ送信（失敗したら必ず児童に知らせる）
+  runSave('がくしゅうの きろく')
     .updateStatus(appState.user.name, t.taskId, t.title, status, '通常', mem, appState.user.classId, appState.unit.id);
 
   if (status === '途中') { showToast('info', 'とちゅうまで ほぞんしたよ'); return; }
@@ -1048,7 +1120,8 @@ function submitTaskProgress(taskId, status, btnElement) {
     } else {
       cqCelebrate(45);
     }
-    setTimeout(renderStudentView, 1000); // 1秒後に画面更新
+    // カードの「ぷるっ」を見せてから素早く更新する（以前は1秒待っていて操作が止まって見えた）
+    setTimeout(renderStudentView, 380);
   }
 }
 
@@ -1070,10 +1143,33 @@ function submitUserStatus(mode) {
   
   if (mode !== '通常' && mode !== '') showToast(icon, msg);
   
-  google.script.run
-    .withFailureHandler(err => console.error(err))
+  runSave('きもちの おしらせ')
     .updateStatus(appState.user.name, 'st_upd', 'ステータス', '更新', mode, '', appState.user.classId, appState.unit.id);
 }
+
+/**
+ * [演出] 先生スタンプの新着（js_core の fetchStudentPulse から呼ばれる）。
+ * 開きっぱなしの画面でも「先生が見てくれた」がその場で届くようにする。
+ * @param {string[]} taskIds - 新しくスタンプが付いたタスクID
+ */
+function onNewStampsArrived(taskIds) {
+  showToast('success', '先生から スタンプが とどいたよ！');
+  if (appState.mode !== 'student') return;
+  // 入力中の画面（計画・まとめ）を勝手に作り直さない。きょうの画面だけ反映する。
+  if (appState.view.student === 'daily') {
+    renderStudentView();
+    cqCelebrate(30);
+    taskIds.forEach(tid => {
+      const card = document.getElementById('cq-task-' + tid);
+      if (card) cqPop(card);
+    });
+  }
+}
+
+// タブを閉じる・別アプリへ切り替える直前に、書きかけの計画を送っておく
+window.addEventListener('pagehide', () => {
+  if (typeof planSaveTimer !== 'undefined' && planSaveTimer) flushPlanSave();
+});
 
 // ==========================================
 //  7. モーダル機能 (Modals)
@@ -1141,7 +1237,7 @@ function openTaskDetailModal(taskId) {
         if (!dataStore.studentProgress[taskId]) dataStore.studentProgress[taskId] = {};
         dataStore.studentProgress[taskId].reflection = txt;
         const curStatus = dataStore.studentProgress[taskId].status || '未着手';
-        google.script.run.updateStatus(appState.user.name, t.taskId, t.title, curStatus, '通常', txt, appState.user.classId, appState.unit.id);
+        runSave('メモ').updateStatus(appState.user.name, t.taskId, t.title, curStatus, '通常', txt, appState.user.classId, appState.unit.id);
         showToast('success', 'メモを保存しました');
       }
     }
@@ -1223,7 +1319,7 @@ function openDailyReflectionModal(targetHour = null) {
       if(!dataStore.studentReflections) dataStore.studentReflections = {};
       dataStore.studentReflections[hourToEdit] = v;
 
-      google.script.run.saveDailyReflection(appState.user.name, appState.unit.id, hourToEdit, v.achievement, v.comment, appState.user.classId, v.skills);
+      runSave('ふりかえり').saveDailyReflection(appState.user.name, appState.unit.id, hourToEdit, v.achievement, v.comment, appState.user.classId, v.skills);
       showToast('success', 'ふりかえりを記録しました');
       renderStudentView(); // 更新
     }
@@ -1396,6 +1492,10 @@ function buildPortfolioTimelineHtml(reflections, opts) {
 function drawSkillRadar(canvasId, chartLabels, chartData, maxVal) {
   const el = document.getElementById(canvasId);
   if (!el) return;
+  // 同じキャンバスに前のチャートが残っているとインスタンスとリサイズ監視が
+  // たまり続け、4GB端末では致命的。描き直す前に必ず破棄する。
+  const prev = Chart.getChart(el);
+  if (prev) prev.destroy();
   const ctx = el.getContext('2d');
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   new Chart(ctx, {
@@ -1433,7 +1533,7 @@ function saveSummary() {
   const val = document.getElementById('pf-summary').value;
   if(!dataStore.portfolioData) dataStore.portfolioData = {};
   dataStore.portfolioData.summary = val;
-  google.script.run.savePortfolio(appState.user.name, appState.unit.id, val, appState.user.classId);
+  runSave('まとめ').savePortfolio(appState.user.name, appState.unit.id, val, appState.user.classId);
   showToast('success', '保存しました');
 }
 
@@ -1754,18 +1854,20 @@ function openMyTaskModal() {
         }); 
         
         if (appState.view.student === 'planning') {
-          renderStudentPlanning(); 
+          renderStudentPlanning();
         } else {
           // Dailyビューの場合は、現在の時数に自動登録する
           const currentHour = String(appState.unit.currentHour);
           if (!dataStore.studentPlan[currentHour]) dataStore.studentPlan[currentHour] = [];
           dataStore.studentPlan[currentHour].push(newId);
           savePlan(); // 計画を保存
-          
-          loginStudent(true); // 画面更新
+
+          // すでに手元のデータへ反映済みなので、サーバーからの全再取得はせず画面だけ描き直す
+          renderStudentView();
         }
-        showToast('success', '課題を追加し、計画に登録しました'); 
-      }).addMyTask(appState.user.name, v.title, v.desc, v.time, appState.unit.id, appState.user.classId); 
+        showToast('success', '課題を追加し、計画に登録しました');
+      }).withFailureHandler(err => { console.error(err); reportSaveFailure('じぶんの課題'); })
+        .addMyTask(appState.user.name, v.title, v.desc, v.time, appState.unit.id, appState.user.classId);
     } 
   }); 
 }
@@ -1779,7 +1881,7 @@ function renderMyTimer() {
   
   const timerHtml = `
     <div id="my-timer-widget" class="no-print card shadow rounded-4 bg-white" style="position:fixed; bottom:20px; right:20px; width:180px; z-index:1050; border:1px solid #ddd;">
-      <div class="card-header bg-light border-0 py-1 d-flex justify-content-between align-items-center" style="cursor:move;" onmousedown="dragElement(document.getElementById('my-timer-widget'))">
+      <div id="my-timer-drag-handle" class="card-header bg-light border-0 py-1 d-flex justify-content-between align-items-center" style="cursor:move; touch-action:none;">
         <small class="fw-bold text-muted"><i class="bi bi-clock me-1"></i>Timer</small>
         <button type="button" class="btn-close btn-close-sm" aria-label="タイマーを閉じる" onclick="document.getElementById('my-timer-widget').classList.toggle('d-none')"></button>
       </div>
@@ -1804,6 +1906,7 @@ function renderMyTimer() {
     </button>
   `;
   document.body.insertAdjacentHTML('beforeend', timerHtml);
+  initTimerDrag();
 }
 
 function setTimerMode(mode) {
@@ -1868,33 +1971,44 @@ function updateTimerDisplay() {
   document.getElementById('timer-display').textContent = `${('0'+m).slice(-2)}:${('0'+s).slice(-2)}`;
 }
 
-// ウィジェットのドラッグ移動
-function dragElement(elmnt) {
-  let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-  elmnt.onmousedown = dragMouseDown;
+// ウィジェットのドラッグ移動。
+// Pointer Events で実装しているため、マウスだけでなくタブレットの指・ペンでも動かせる
+// （旧実装は mousedown/mousemove のみで、GIGA端末のタッチ操作では動かせなかった）。
+function initTimerDrag() {
+  const widget = document.getElementById('my-timer-widget');
+  const handle = document.getElementById('my-timer-drag-handle');
+  if (!widget || !handle) return;
 
-  function dragMouseDown(e) {
-    e = e || window.event;
-    pos3 = e.clientX;
-    pos4 = e.clientY;
-    document.onmouseup = closeDragElement;
-    document.onmousemove = elementDrag;
-  }
+  let dragging = false;
+  let startX = 0, startY = 0, origX = 0, origY = 0;
 
-  function elementDrag(e) {
-    e = e || window.event;
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return; // 閉じるボタンはドラッグ扱いにしない
+    dragging = true;
+    const rect = widget.getBoundingClientRect();
+    // 初期配置は bottom/right 指定。そのまま top/left を書くと最初のドラッグで
+    // 位置が跳ぶため、つかんだ瞬間に top/left 基準へ切り替える。
+    widget.style.top = rect.top + 'px';
+    widget.style.left = rect.left + 'px';
+    widget.style.bottom = 'auto';
+    widget.style.right = 'auto';
+    startX = e.clientX; startY = e.clientY;
+    origX = rect.left;  origY = rect.top;
+    handle.setPointerCapture(e.pointerId);
     e.preventDefault();
-    pos1 = pos3 - e.clientX;
-    pos2 = pos4 - e.clientY;
-    pos3 = e.clientX;
-    pos4 = e.clientY;
-    elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
-    elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
-  }
+  });
 
-  function closeDragElement() {
-    document.onmouseup = null;
-    document.onmousemove = null;
-  }
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    // 画面の外へ出て戻せなくならないよう、可動範囲を画面内に収める
+    const nx = Math.min(Math.max(0, origX + e.clientX - startX), Math.max(0, window.innerWidth - widget.offsetWidth));
+    const ny = Math.min(Math.max(0, origY + e.clientY - startY), Math.max(0, window.innerHeight - widget.offsetHeight));
+    widget.style.left = nx + 'px';
+    widget.style.top = ny + 'px';
+  });
+
+  const endDrag = () => { dragging = false; };
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
 }
 </script>
