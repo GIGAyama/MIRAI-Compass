@@ -127,7 +127,7 @@ let appState = {
     teacher: 'cards',   // 先生の表示 ('cards':一覧, 'heatmap':進捗, 'seating':座席, 'summaries':まとめ, 'design':設計)
     teacherClassId: 'All' // 先生が見ているクラスフィルター
   },
-  sound: { enabled: true, unlocked: false, prevSosCount: 0 }, // 音声通知の設定
+  sound: { enabled: true, unlocked: false, prevSosCount: 0, warned: false }, // 音声通知の設定
   unit: { id: "", title: "", totalHours: 8, currentHour: 1 }, // 現在選択中の単元情報
   unitList: [],       // 全単元のリスト
   schedules: []       // 配信されたスケジュール通知
@@ -237,7 +237,15 @@ function loadMainData() {
         if (appState.mode === 'student') {
           if (typeof renderMyTimer === 'function') renderMyTimer(); // タイマー表示 (js_student.html)
           checkScheduleAndNotify(); // 授業通知チェック
-          unlockAudio();            // 音声再生の準備
+        }
+        // 音声再生の準備。自動ログイン時はユーザー操作が無く play() が
+        // ブロックされるため、最初の操作（タップ／キー入力）でも解除を試みる。
+        // 先生モードでも SOS チャイムを鳴らすので、両モードで行う。
+        unlockAudio();
+        if (!appState.sound.unlocked) {
+          const once = () => { unlockAudio(); };
+          document.addEventListener('pointerdown', once, { once: true });
+          document.addEventListener('keydown', once, { once: true });
         }
       } else { 
         handleError({ message: res.error }); 
@@ -297,12 +305,16 @@ function startInitialization() {
  * 10秒ごとにサーバーから最新の「状況データ（LiveStatus）」だけを取得します。
  * これにより、先生の画面で子供たちのSOSなどがリアルタイムに反映されます。
  */
+let pollTickCount = 0; // ポーリング回数（児童のパルス取得の間引きに使う）
+
 function startAutoRefresh() {
   if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-  
+  pollTickCount = 0;
+
   autoRefreshTimer = setInterval(() => {
     // ブラウザのタブが裏に隠れている時は通信を止める（PC負荷軽減）
     if (document.hidden) return;
+    pollTickCount++;
 
     // 【DB読込】LiveStatusシートのみを軽量取得
     google.script.run
@@ -310,7 +322,7 @@ function startAutoRefresh() {
         if (res.success && res.live) {
           // データを更新
           dataStore.liveStatus = res.live;
-          
+
           // 先生モードなら、画面全体を再描画せず、カードのステータスだけ書き換える（高速化）
           if (appState.mode === 'teacher') {
             if (typeof updateLiveViews === 'function') updateLiveViews(); // js_teacher.htmlで定義
@@ -324,8 +336,46 @@ function startAutoRefresh() {
       })
       .withFailureHandler(e => console.error("Polling Error", e))
       .getLiveStatusSnapshot(); // サーバー側の軽量関数
-      
+
+    // 児童モードでは30秒に1回、先生スタンプと時間割の「パルス」も取得する。
+    // これで開きっぱなしの児童画面にも先生の反応（スタンプ・授業配信）がほぼリアルタイムで届く。
+    if (appState.mode === 'student' && appState.user.name && pollTickCount % 3 === 0) {
+      fetchStudentPulse();
+    }
+
   }, CONSTANTS.REFRESH_INTERVAL);
+}
+
+/**
+ * [機能] 児童向け軽量同期（先生スタンプ・時間割）
+ * getStudentProgress の全シート読みは重いので、専用の軽量APIを叩く。
+ * 新しいスタンプが届いていたら、その場でお祝い演出つきで知らせる。
+ */
+function fetchStudentPulse() {
+  google.script.run
+    .withSuccessHandler(res => {
+      if (!res.success || !res.json) return;
+      let d;
+      try { d = JSON.parse(res.json); } catch (e) { return; }
+
+      // 時間割はまるごと最新に差し替え（配信直後の児童画面にも通知バーが出る）
+      if (Array.isArray(d.schedules)) {
+        appState.schedules = d.schedules;
+        if (appState.mode === 'student') checkScheduleAndNotify();
+      }
+
+      // スタンプは差分を取り、増えた分だけお知らせする
+      if (d.feedback && typeof d.feedback === 'object') {
+        const prev = dataStore.studentFeedback || {};
+        const fresh = Object.keys(d.feedback).filter(tid => d.feedback[tid] && d.feedback[tid] !== prev[tid]);
+        dataStore.studentFeedback = d.feedback;
+        if (fresh.length > 0 && typeof onNewStampsArrived === 'function') {
+          onNewStampsArrived(fresh); // js_student.html で演出とUI反映を行う
+        }
+      }
+    })
+    .withFailureHandler(e => console.error("Pulse Error", e))
+    .getStudentPulse(appState.user.name);
 }
 
 /**
@@ -713,6 +763,35 @@ function handleError(err) {
   Swal.fire({ title: 'システムエラー', text: msg, icon: 'error' });
   // スクリーンリーダー向けにエラーを読み上げる
   if (typeof announce === 'function') announce(msg, true);
+}
+
+/**
+ * [機能] 保存失敗の通知（楽観的更新の裏で走る書き込みが失敗したとき用）
+ * これまで「保存しました」と出したまま裏で失敗すると子どもは気づけなかった。
+ * どの保存が失敗したかを、児童にも分かる言葉で必ず画面に出す。
+ */
+function reportSaveFailure(what) {
+  showToast('error', `${what}を ほぞんできなかったよ。もういちど ためしてね`);
+}
+
+/**
+ * [機能] サーバー保存呼び出しの共通ラッパー。
+ * google.script.run の「通信失敗」と、サーバーが返す {success:false}（ロック待ちなど）の
+ * 両方を失敗として扱い、reportSaveFailure で必ず知らせる。
+ * @param {string} what - 児童向けの保存対象名（例:「けいかく」）
+ * @param {function} [onSuccess] - 成功時の追加処理（省略可）
+ * @returns {object} google.script.run のチェーン（呼び出し側でサーバー関数を呼ぶ）
+ */
+function runSave(what, onSuccess) {
+  return google.script.run
+    .withSuccessHandler(res => {
+      if (res && res.success === false) { reportSaveFailure(what); return; }
+      if (onSuccess) onSuccess(res);
+    })
+    .withFailureHandler(err => {
+      console.error(err);
+      reportSaveFailure(what);
+    });
 }
 
 // ローディング画面の制御

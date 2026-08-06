@@ -410,8 +410,17 @@ function getLiveStatusSnapshot() {
   try {
     const ssId = PROPERTIES.getProperty('SS_ID');
     if (!ssId) return createSuccessResponse({ live: [] });
+
+    // 40台が10秒間隔で同時にポーリングすると、同じシートの全読みが毎秒4回走る。
+    // 8秒だけ結果を共有キャッシュして、クラス全体で「1回の読み」を使い回す。
+    // 書き込み側（updateStatus / saveSeatCoordinates）がキャッシュを即破棄するので、
+    // SOSなどの変化は次のポーリングで必ず拾える。
+    const cache = CacheService.getScriptCache();
+    const cacheKey = 'live_snapshot_' + ssId;
+    const cached = cache.get(cacheKey);
+    if (cached) return createSuccessResponse({ live: JSON.parse(cached) });
+
     const ss = SpreadsheetApp.openById(ssId);
-    
     const liveData = fetchSheetData(ss, DB_SCHEMA.LiveStatus.name).map(r => ({
       id: String(r[0]), name: String(r[1]), task: String(r[2]), mode: String(r[3]),
       time: r[4] ? formatDate(r[4]) : '', currentUnitId: String(r[5] || ''),
@@ -419,10 +428,53 @@ function getLiveStatusSnapshot() {
       x: Number(r[8]) || 0, y: Number(r[9]) || 0
     }));
 
+    try { cache.put(cacheKey, JSON.stringify(liveData), 8); } catch (ignore) { /* 100KB超過時は素通し */ }
     return createSuccessResponse({ live: liveData });
   } catch (e) {
     return createErrorResponse(e);
   }
+}
+
+/**
+ * ライブスナップショットの共有キャッシュを破棄する（書き込みAPIから呼ぶ）。
+ * これにより児童のSOS・状態変化が次のポーリングで確実に反映される。
+ */
+function invalidateLiveSnapshotCache() {
+  const ssId = PROPERTIES.getProperty('SS_ID');
+  if (!ssId) return;
+  try { CacheService.getScriptCache().remove('live_snapshot_' + ssId); } catch (ignore) { /* キャッシュ不調でも本処理は続行 */ }
+}
+
+/**
+ * 児童向け軽量ポーリングAPI。
+ * 先生スタンプ（Feedback）と今日以降の時間割（ClassSchedule）だけを返す。
+ * getStudentProgress（6シート全読み）を定期実行するのは重すぎるため、
+ * 「開いている児童の画面に先生の反応が届く」ことに必要な最小データに絞っている。
+ */
+function getStudentPulse(studentName) {
+  try {
+    MiraiAuth.requireUser();
+    const ssId = PROPERTIES.getProperty('SS_ID');
+    if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
+    const ss = SpreadsheetApp.openById(ssId);
+
+    // Feedback は先生が名前指定で書き込む（getStudentProgress と同じ照合ルール）
+    const fbMap = {};
+    fetchSheetData(ss, DB_SCHEMA.Feedback.name).forEach(r => {
+      if (r[1] === studentName) fbMap[String(r[2])] = String(r[3]);
+    });
+
+    const todayStr = Utilities.formatDate(new Date(), "JST", "yyyy-MM-dd");
+    const schedules = fetchSheetData(ss, DB_SCHEMA.ClassSchedule.name)
+      .map(r => ({
+        id: String(r[0]), classId: String(r[1]), date: normalizeDateStr(r[2]),
+        startTime: normalizeTimeStr(r[3]), endTime: normalizeTimeStr(r[4]),
+        unitId: String(r[5]), hour: String(r[6]), message: String(r[7])
+      }))
+      .filter(s => s.date >= todayStr);
+
+    return createSuccessResponse({ json: JSON.stringify({ feedback: fbMap, schedules: schedules }) });
+  } catch (e) { return createErrorResponse(e); }
 }
 
 /**
@@ -526,6 +578,7 @@ function updateLiveStatusMeta(ss, sid, name, classId, unitId) {
           if (unitId) sheet.getRange(i + 1, 6).setValue(unitId);
           if (classId) sheet.getRange(i + 1, 8).setValue(classId);
           if (name) sheet.getRange(i + 1, 2).setValue(name); // 表示名を最新に
+          invalidateLiveSnapshotCache();
           return;
         }
       }
@@ -571,16 +624,18 @@ function updateStatus(studentName, taskId, taskTitle, status, mode, reflection, 
       const displayTitle = taskTitle || taskId;
 
       if (rIdx > 0) {
-        // 既存行を更新（表示名も最新の申告値に合わせる）
-        liveSheet.getRange(rIdx, 2).setValue(studentName);
-        liveSheet.getRange(rIdx, 3, 1, 2).setValues([[displayTitle, mode]]);
-        liveSheet.getRange(rIdx, 5).setValue(now);
-        if (classId) liveSheet.getRange(rIdx, 8).setValue(classId);
-        if (currentUnitId) liveSheet.getRange(rIdx, 6).setValue(currentUnitId);
+        // 既存行の col2〜col8 を1回の setValues で更新（往復5回→1回）。
+        // 未指定の unitId / classId / currentHour は既存値を保持する。
+        const cur = data[rIdx - 1];
+        liveSheet.getRange(rIdx, 2, 1, 7).setValues([[
+          studentName, displayTitle, mode, now,
+          currentUnitId || cur[5] || "", cur[6] || 1, classId || cur[7] || ""
+        ]]);
       } else {
         // 新規追加（studentId 列＝本人メール、studentName 列＝表示名）
         liveSheet.appendRow([sid, studentName, displayTitle, mode, now, currentUnitId || "", 1, classId || "", 0, 0]);
       }
+      invalidateLiveSnapshotCache();
     }
     return createSuccessResponse();
   } catch (e) { 
@@ -883,6 +938,7 @@ function saveSeatCoordinates(coordinates) {
         const rIdx = nameToRow.get(c.name);
         if (rIdx) { sheet.getRange(rIdx, 9, 1, 2).setValues([[c.x, c.y]]); }
       });
+      invalidateLiveSnapshotCache();
       return createSuccessResponse();
     } catch(e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
   } else { return createErrorResponse(new Error("Timeout")); }
@@ -1131,11 +1187,24 @@ function importUnitJson(jsonStr) {
       const uInfoStr = JSON.stringify(data.unitInfo || {});
       const totalHours = data.unitInfo?.totalHours || 8;
 
-      const rows = data.tasks.map(t => [
-        uid, t.id || '', t.type || 'must', t.title || '無題', t.description || '', t.estimatedTime || 10, '',
-        t.category || 'まなぶ', t.step || '', t.textbook || '', t.tablet || '', t.print || '',
-        (t.prerequisites || []).join(','), t.format || 'student', uInfoStr, totalHours
-      ]);
+      // タスクIDは単元IDを接頭辞にして全体で一意にする。
+      // AI出力やテンプレートは "t_01" のような固定IDを使うため、そのまま保存すると
+      // 別単元間で衝突し、進捗・スタンプ・ワークシート（taskId で照合）が混線する。
+      // prerequisites も同じ対応表で貼り替える。
+      const idMap = {};
+      (data.tasks || []).forEach((t, i) => {
+        const orig = String(t.id || ('t_' + (i + 1)));
+        idMap[orig] = uid + '_' + orig;
+      });
+      const rows = (data.tasks || []).map((t, i) => {
+        const orig = String(t.id || ('t_' + (i + 1)));
+        const prereqs = (t.prerequisites || []).map(p => idMap[String(p)] || String(p));
+        return [
+          uid, idMap[orig], t.type || 'must', t.title || '無題', t.description || '', t.estimatedTime || 10, '',
+          t.category || 'まなぶ', t.step || '', t.textbook || '', t.tablet || '', t.print || '',
+          prereqs.join(','), t.format || 'student', uInfoStr, totalHours
+        ];
+      });
 
       if (rows.length > 0) {
         const sheet = ss.getSheetByName(DB_SCHEMA.UnitMaster.name);
