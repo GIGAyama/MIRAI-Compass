@@ -212,30 +212,137 @@ function renderTeacherManager(teachers) {
 /**
  * [画面描画] 先生用メイン画面の枠組み
  */
+// 先生画面のビュー定義。「授業の流れ」の3フェーズにグループ分けして、
+// 初めての先生でも「今なにをする画面か」「次にどこを見るか」が分かるようにする。
+const TEACHER_VIEWS = {
+  design:    { group: 'prep',  label: '単元設計', icon: 'bi-pencil-ruler',  title: '単元設計',
+               hint: '単元と課題を用意します。テンプレートを選ぶだけでも始められます。' },
+  control:   { group: 'prep',  label: '授業配信', icon: 'bi-broadcast',     title: '授業の配信',
+               hint: '「いまこの授業をやっています」を児童の画面に知らせます。' },
+  cards:     { group: 'live',  label: 'LIVE',     icon: 'bi-activity',      title: 'LIVEモニター', auto: true,
+               hint: '子どもの「いまの課題」とSOSがリアルタイムで並びます。' },
+  seating:   { group: 'live',  label: '座席',     icon: 'bi-grid-3x3-gap',  title: '座席表', auto: true,
+               hint: '教室の座席の並びで見守れます（カードはドラッグで配置）。' },
+  heatmap:   { group: 'live',  label: '進捗一覧', icon: 'bi-table',         title: '進捗一覧',
+               hint: 'クラス全員×課題の進み具合を一目で確認。セルを押すとスタンプを送れます。' },
+  dashboard: { group: 'after', label: '添削',     icon: 'bi-check2-square', title: 'ワークシート添削',
+               hint: '提出されたワークシートを確認して、赤ペンとコメントで返却します。' },
+  summaries: { group: 'after', label: 'まとめ',   icon: 'bi-journal-check', title: 'ふりかえり・まとめ',
+               hint: '単元のまとめにスタンプとコメントを返します。' }
+};
+const TEACHER_NAV_GROUPS = [
+  { id: 'prep',  caption: '① じゅんび',      views: ['design', 'control'] },
+  { id: 'live',  caption: '② 授業中',        views: ['cards', 'seating', 'heatmap'] },
+  { id: 'after', caption: '③ みとり・かえす', views: ['dashboard', 'summaries'] }
+];
+
+/**
+ * [判定] はじめかたガイド用：準備がどこまでできているか。
+ * schedules はサーバーが「今日以降」だけを返すため、hasSchedule は「今日の配信があるか」。
+ */
+function getTeacherSetupStatus() {
+  return {
+    hasUnit: appState.unitList.length > 0,
+    hasRoster: (dataStore.roster || []).some(r => r && r.isActive !== false && r.name),
+    hasSchedule: (appState.schedules || []).length > 0
+  };
+}
+
+/**
+ * [HTML生成] はじめかたガイド。
+ * 単元がまだ無い（＝初回）ときは3ステップのカードを大きく出し、
+ * 単元はあるが名簿・配信が未了のときは残りだけを控えめなバーで出す。
+ * すべて済んでいれば何も出さない。
+ */
+function renderTeacherSetupGuideHtml() {
+  const st = getTeacherSetupStatus();
+  if (st.hasUnit && st.hasRoster && st.hasSchedule) return '';
+
+  const stepRow = (done, num, title, desc, btnLabel, onclick) => `
+    <div class="d-flex align-items-center gap-3 p-2 rounded-3 ${done ? 'opacity-50' : 'bg-white shadow-sm'}">
+      <span class="setup-step-num ${done ? 'done' : ''}">${done ? '<i class="bi bi-check-lg" aria-hidden="true"></i>' : num}</span>
+      <div class="flex-grow-1">
+        <div class="fw-bold small">${title}</div>
+        <div class="x-small text-muted">${desc}</div>
+      </div>
+      ${done ? '' : `<button class="btn btn-primary btn-sm rounded-pill px-3 flex-shrink-0" onclick="${onclick}">${btnLabel}</button>`}
+    </div>`;
+
+  if (!st.hasUnit) {
+    return `
+      <div class="card border-0 rounded-4 p-3 mb-3 flex-shrink-0 setup-guide-card">
+        <div class="fw-bold text-primary mb-1"><i class="bi bi-stars me-2" aria-hidden="true"></i>3ステップではじめる自由進度学習</div>
+        <div class="x-small text-muted mb-2">はじめてでも大丈夫。上から順に進めるだけで、今日から授業で使えます。</div>
+        <div class="d-grid gap-2">
+          ${stepRow(st.hasUnit, 1, '単元をつくる', 'テンプレートを選ぶだけでOK。あとから自由に手直しできます。', 'テンプレートを見る', 'openUnitManagerModal()')}
+          ${stepRow(st.hasRoster, 2, '名簿をとうろく', 'ExcelやCSVから貼り付けるだけ。児童のログインに使います。', '名簿をひらく', 'openRosterManagerModal()')}
+          ${stepRow(st.hasSchedule, 3, 'きょうの授業を配信', '児童の画面に「いまの授業」への案内が表示されます。', '配信画面へ', "setTeacherView('control')")}
+        </div>
+      </div>`;
+  }
+
+  // 単元はある：残りのステップだけを1行で（このセッション中は ✕ で消せる）
+  let dismissed = false;
+  try { dismissed = sessionStorage.getItem('mirai_setup_bar_dismissed') === '1'; } catch (e) { /* プライベートモード等 */ }
+  if (dismissed) return '';
+
+  const chips = [];
+  if (!st.hasRoster) chips.push(`<button class="btn btn-sm btn-outline-primary rounded-pill" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿をとうろくする</button>`);
+  if (!st.hasSchedule) chips.push(`<button class="btn btn-sm btn-outline-primary rounded-pill" onclick="setTeacherView('control')"><i class="bi bi-broadcast me-1" aria-hidden="true"></i>きょうの授業を配信する</button>`);
+  return `
+    <div class="d-flex align-items-center gap-2 flex-wrap mb-3 flex-shrink-0 setup-guide-bar rounded-3 px-3 py-2">
+      <span class="small text-muted"><i class="bi bi-lightbulb me-1" aria-hidden="true"></i>つぎのじゅんび：</span>
+      ${chips.join('')}
+      <button type="button" class="btn-close ms-auto" style="font-size:.65rem" aria-label="このお知らせを閉じる" onclick="dismissSetupGuideBar()"></button>
+    </div>`;
+}
+
+/** [アクション] じゅんびリマインダーを閉じる（このセッションの間だけ） */
+function dismissSetupGuideBar() {
+  try { sessionStorage.setItem('mirai_setup_bar_dismissed', '1'); } catch (e) { /* 保存できなくても閉じる */ }
+  renderTeacherView();
+}
+
 function renderTeacherView() {
   const container = document.getElementById('app-container');
-  
+  const view = TEACHER_VIEWS[appState.view.teacher] || TEACHER_VIEWS.cards;
+
   // クラス切り替えタブの生成
   const classes = ['All', ...dataStore.classList];
-  const tabsHtml = classes.map(c => 
+  const tabsHtml = classes.map(c =>
     `<li class="nav-item"><a class="nav-link ${appState.view.teacherClassId === c ? 'active fw-bold' : ''}" href="#" onclick="setTeacherClass('${escJs(c)}')">${c === 'All' ? '全員' : escapeHtml(c)}</a></li>`
   ).join('');
 
+  // フェーズ別ナビ（① じゅんび / ② 授業中 / ③ みとり・かえす）
+  const navHtml = TEACHER_NAV_GROUPS.map(g => {
+    const btns = g.views.map(v => {
+      const def = TEACHER_VIEWS[v];
+      const active = appState.view.teacher === v;
+      return `<button type="button" class="tnav-btn ${active ? 'active' : ''}" ${active ? 'aria-current="page"' : ''} onclick="setTeacherView('${v}')">
+                <i class="bi ${def.icon} me-1" aria-hidden="true"></i>${def.label}
+              </button>`;
+    }).join('');
+    // 「じゅんび」グループには名簿（モーダル）も並べる
+    const rosterBtn = g.id === 'prep'
+      ? `<button type="button" class="tnav-btn" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿</button>`
+      : '';
+    return `<div class="tnav-group" role="group" aria-label="${escapeHtml(g.caption)}">
+              <span class="tnav-caption">${escapeHtml(g.caption)}</span>
+              <div class="tnav-btns">${btns}${rosterBtn}</div>
+            </div>`;
+  }).join('');
+
+  const autoBadge = view.auto ? `<span class="badge bg-success ms-2 small" style="font-size:0.6rem" title="この画面は自動で更新されます">AUTO</span>` : '';
+
   container.innerHTML = `
     <div class="card shadow-sm p-4 border-0 rounded-4 teacher-view-card h-100">
-      <!-- 上部ヘッダー：モード切替ボタン群 -->
-      <div class="d-flex justify-content-between align-items-center mb-3 flex-shrink-0">
-        <h5 class="fw-bold m-0 text-primary"><i class="bi bi-speedometer2 me-2"></i>モニター <span class="badge bg-success ms-2 small" style="font-size:0.6rem">AUTO</span></h5>
-        <div class="d-flex gap-3 align-items-center">
-          <div class="btn-group shadow-sm rounded-pill" role="group">
-            <button class="btn btn-sm ${appState.view.teacher === 'cards' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('cards')">LIVE</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'heatmap' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('heatmap')">一覧</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'seating' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('seating')">座席</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'summaries' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('summaries')">まとめ</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'dashboard' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('dashboard')"><i class="bi bi-check2-square me-1"></i>添削</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'design' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('design')"><i class="bi bi-pencil-ruler me-1"></i>設計</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'control' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('control')">進行</button>
-          </div>
+      <!-- 上部ヘッダー：現在のビュー名 + 主要アクション -->
+      <div class="d-flex justify-content-between align-items-start gap-3 mb-2 flex-shrink-0 flex-wrap">
+        <div>
+          <h5 class="fw-bold m-0 text-primary"><i class="bi ${view.icon} me-2" aria-hidden="true"></i>${view.title}${autoBadge}</h5>
+          <div class="x-small text-muted mt-1">${view.hint}</div>
+        </div>
+        <div class="d-flex gap-2 align-items-center flex-shrink-0">
           <!-- 印刷：まとめ一覧・ヒートマップを紙で配るときに使う。
                印刷用スタイル（css.html の @media print）が当たり、
                ナビ・フッター・ボタン・タイマーは出ない。 -->
@@ -243,15 +350,35 @@ function renderTeacherView() {
           <button class="btn btn-primary btn-sm rounded-pill px-3 shadow-sm" onclick="openUnitManagerModal()"><i class="bi bi-plus-circle me-1" aria-hidden="true"></i>新規単元登録</button>
         </div>
       </div>
-      
+
+      <!-- フェーズ別ナビ -->
+      <nav class="tnav mb-3 flex-shrink-0" aria-label="先生メニュー">${navHtml}</nav>
+
+      <!-- はじめかたガイド（準備が済んでいないときだけ出る） -->
+      ${renderTeacherSetupGuideHtml()}
+
       <!-- クラスフィルタータブ -->
-      <ul class="nav nav-tabs mb-4 border-bottom-0 flex-shrink-0">${tabsHtml}</ul>
-      
+      <ul class="nav nav-tabs mb-3 border-bottom-0 flex-shrink-0">${tabsHtml}</ul>
+
       <!-- メインコンテンツエリア -->
       <div id="t-area" class="position-relative flex-grow-1 d-flex flex-column overflow-hidden"></div>
     </div>`;
-    
+
   renderTeacherDashboardContent(); // 中身を描画
+}
+
+/**
+ * [HTML生成] 先生ビュー共通の空状態。
+ * 「データが無い」で終わらせず、次にやることへのボタンを必ず添える。
+ */
+function teacherEmptyState(icon, title, desc, actionsHtml) {
+  return `
+    <div class="d-flex flex-column align-items-center justify-content-center text-center p-5 flex-grow-1">
+      <i class="bi ${icon} text-secondary opacity-50 mb-3" style="font-size:2.6rem" aria-hidden="true"></i>
+      <div class="fw-bold mb-1">${title}</div>
+      <div class="small text-muted mb-3" style="max-width:420px">${desc}</div>
+      <div class="d-flex gap-2 flex-wrap justify-content-center">${actionsHtml || ''}</div>
+    </div>`;
 }
 
 // ビュー切り替えヘルパー
@@ -406,9 +533,11 @@ function updateLiveViews() {
  * [LIVEビュー] カード一覧表示
  */
 function renderLiveCards(container, students) {
-  container.className = "flex-grow-1 overflow-auto"; 
+  container.className = "flex-grow-1 overflow-auto d-flex flex-column";
   if (students.length === 0) {
-    container.innerHTML = `<div class="text-muted p-5 text-center">表示する生徒がいません</div>`;
+    container.innerHTML = teacherEmptyState('bi-people', 'まだ児童がいません',
+      '名簿を登録すると、児童がログインした時点からここにリアルタイムで表示されます。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿を登録する</button>`);
   } else {
     container.innerHTML = `<div class="row row-cols-2 row-cols-md-4 row-cols-lg-5 g-3">${students.map(s => {
       const isOtherUnit = s.currentUnitId && s.currentUnitId !== appState.unit.id;
@@ -434,12 +563,23 @@ function renderLiveCards(container, students) {
  * [一覧ビュー] ヒートマップ（進捗一覧表）
  */
 function renderHeatmap(container, students) {
-  container.className = "flex-grow-1 overflow-auto";
+  container.className = "flex-grow-1 overflow-auto d-flex flex-column";
   const currentTasks = getCurrentUnitTasks();
-  if (currentTasks.length === 0) { container.innerHTML = `<div class="text-center p-5">この単元の課題データなし</div>`; return; }
-  
+  if (currentTasks.length === 0) {
+    container.innerHTML = teacherEmptyState('bi-table', 'この単元にはまだ課題がありません',
+      '単元設計で課題をつくると、クラス全員×課題の進捗がここに一覧表示されます。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="setTeacherView('design')"><i class="bi bi-pencil-ruler me-1" aria-hidden="true"></i>単元設計をひらく</button>
+       <button class="btn btn-outline-primary btn-sm rounded-pill px-3" onclick="openUnitManagerModal()"><i class="bi bi-collection me-1" aria-hidden="true"></i>テンプレートから作成</button>`);
+    return;
+  }
+
   const studentNames = students.map(s => s.name).sort();
-  if (studentNames.length === 0) { container.innerHTML = `<div class="text-center p-5">生徒データなし</div>`; return; }
+  if (studentNames.length === 0) {
+    container.innerHTML = teacherEmptyState('bi-people', 'まだ児童がいません',
+      '名簿を登録すると、児童ごとの進捗がここに一覧表示されます。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿を登録する</button>`);
+    return;
+  }
 
   let h = `<div class="table-responsive mb-4"><table class="table table-borderless heatmap-table"><thead><tr><th style="min-width:100px;text-align:left">名前</th>${currentTasks.map((t, i) => `<th role="button" tabindex="0" title="${escapeHtml(t.title)}" onclick="showTeacherTaskDetailSimple('${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); showTeacherTaskDetailSimple('${escJs(t.taskId)}');}">${t.step ? t.step.replace(/[^0-9]/g, '') : i + 1}</th>`).join('')}</tr></thead><tbody>`;
   
@@ -480,7 +620,10 @@ function renderHeatmap(container, students) {
 function renderSeatingView(container) {
   const students = getFilteredStudents();
   if (students.length === 0) {
-    container.innerHTML = `<div class="text-center p-5 text-muted">表示する生徒がいません</div>`;
+    container.className = "flex-grow-1 d-flex flex-column";
+    container.innerHTML = teacherEmptyState('bi-grid-3x3-gap', 'まだ児童がいません',
+      '名簿を登録すると、教室の座席の並びで子どもたちを見守れるようになります。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿を登録する</button>`);
     return;
   }
 
@@ -684,7 +827,9 @@ function renderSummaryListView(container) {
   const students = getSummaryStudentsSorted();
 
   if (students.length === 0) {
-    container.innerHTML = `<div class="text-center p-5 text-muted">表示する生徒がいません</div>`;
+    container.innerHTML = teacherEmptyState('bi-journal-check', 'まだ児童がいません',
+      '名簿を登録すると、児童のふりかえり・単元のまとめにスタンプとコメントを返せるようになります。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿を登録する</button>`);
     return;
   }
 
@@ -1278,9 +1423,17 @@ function renderTeacherDesignView(container) {
 
   container.className = "d-flex flex-column flex-grow-1 overflow-hidden h-100";
   container.style.height = "100%";
-  
-  const currentTasks = getCurrentUnitTasks(); 
-  const totalHours = appState.unit.totalHours; 
+
+  // 単元がまだ1つも無いときは、設計ボードではなく作成への案内を出す
+  if (!appState.unit.id) {
+    container.innerHTML = teacherEmptyState('bi-pencil-ruler', 'まだ単元がありません',
+      'まずは単元をつくりましょう。テンプレートなら、導入〜まとめまで組み立てずみの単元がワンクリックで用意できます。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openUnitManagerModal()"><i class="bi bi-collection me-1" aria-hidden="true"></i>テンプレートから作成</button>`);
+    return;
+  }
+
+  const currentTasks = getCurrentUnitTasks();
+  const totalHours = appState.unit.totalHours;
   
   const taskPool = [];
   const hoursMap = {}; 

@@ -770,6 +770,49 @@ input.form-control[readonly][style*="width: 40px"] { min-width: 44px; }
 /* 授業通知バー（fixed）が出ている間、本文の先頭が隠れないよう余白を足す */
 body.has-schedule-bar main.container { padding-top: 52px; }
 
+/* =========================================
+   8.6 先生ナビ（授業の流れで3グループ）
+   =========================================
+   7つのビューを平らに並べると、初めての先生には「どれを押せばいいか」が
+   分からない。「① じゅんび → ② 授業中 → ③ みとり・かえす」の
+   時系列グループで示し、画面の使い方自体が授業の進め方の説明になるようにする。
+   ========================================= */
+.tnav { display: flex; gap: .6rem; flex-wrap: wrap; }
+.tnav-group {
+  display: flex; flex-direction: column; gap: .15rem;
+  padding: .3rem .45rem .4rem;
+  background: #f4f7fb;
+  border-radius: .9rem;
+}
+.tnav-caption {
+  font-size: .62rem; font-weight: 700; letter-spacing: .05em;
+  color: #64748b; padding-left: .35rem;
+}
+.tnav-btns { display: flex; gap: .2rem; flex-wrap: wrap; }
+.tnav-btn {
+  border: 0; background: transparent;
+  border-radius: .6rem; padding: .32rem .7rem;
+  font-size: .85rem; font-weight: 600; color: #33415c;
+  white-space: nowrap; cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.tnav-btn:hover { background: #e6edf7; }
+.tnav-btn.active {
+  background: var(--color-primary, #1a73e8); color: #fff;
+  box-shadow: 0 2px 6px rgba(26, 115, 232, .35);
+}
+
+/* はじめかたガイド */
+.setup-guide-card { background: linear-gradient(135deg, #eef4ff 0%, #f6f0ff 100%); }
+.setup-guide-bar { background: #fff8e6; border: 1px solid #f4e3b0; }
+.setup-step-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  background: var(--color-primary, #1a73e8); color: #fff;
+  font-weight: 700; font-size: .9rem;
+}
+.setup-step-num.done { background: #2e9e63; }
+
 /* クエスト系の押しボタンは背景がグラデーションで濃く、既定の青いリングが
    沈んで見えないことがある。白いふちどり＋青リングの二重にして、
    どの色の上でもキーボードフォーカスが確実に見えるようにする。 */
