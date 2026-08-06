@@ -180,6 +180,13 @@ function renderStudentView() {
   } else {
     renderStudentDaily();
   }
+  // ビューが入れかわったことが分かるよう、すっと入れる（動きを減らす設定では出さない）
+  const appc = document.getElementById('app-container');
+  if (appc && !cqReducedMotion()) {
+    appc.classList.remove('cq-view-in');
+    void appc.offsetWidth;
+    appc.classList.add('cq-view-in');
+  }
   // 児童タブバーを（無ければ）用意して、今のタブを目立たせる
   renderStudentBottomNav();
 }
@@ -216,6 +223,7 @@ function renderStudentBottomNav() {
   // 児童モードでログイン済みのときだけ表示する
   if (appState.mode !== 'student' || !appState.user.name) { removeStudentBottomNav(); return; }
   document.body.classList.add('has-student-nav');
+  document.body.classList.add('cq-student');
 
   let nav = document.getElementById('student-bottom-nav');
   if (!nav) {
@@ -235,8 +243,15 @@ function renderStudentBottomNav() {
   // 現在のタブを目立たせる（aria-current で支援技術にも伝える）
   const current = appState.view.student;
   nav.querySelectorAll('.snav-btn').forEach(function (btn) {
-    if (btn.getAttribute('data-view') === current) {
+    const isCurrent = btn.getAttribute('data-view') === current;
+    const wasCurrent = btn.hasAttribute('aria-current');
+    if (isCurrent) {
       btn.setAttribute('aria-current', 'page');
+      // タブが「今」になった瞬間だけ、アイコンを「ぴょん」とはねさせる
+      if (!wasCurrent && !cqReducedMotion()) {
+        const ic = btn.querySelector('i');
+        if (ic) { ic.classList.remove('cq-tab-pop'); void ic.offsetWidth; ic.classList.add('cq-tab-pop'); }
+      }
     } else {
       btn.removeAttribute('aria-current');
     }
@@ -248,6 +263,7 @@ function removeStudentBottomNav() {
   const nav = document.getElementById('student-bottom-nav');
   if (nav && nav.parentNode) nav.parentNode.removeChild(nav);
   document.body.classList.remove('has-student-nav');
+  document.body.classList.remove('cq-student');
 }
 
 /**
@@ -259,187 +275,389 @@ function changeCurrentHour(h) {
 }
 
 // ==========================================
-//  3. 今日の学習画面 (Daily View)
+//  3. 今日の学習画面 (Daily View)  ── コンパスクエスト設計
 // ==========================================
 
-function renderStudentDaily() {
-  const container = document.getElementById('app-container');
-  
-  // 自分のステータス（SOSなど）取得
-  const myStat = dataStore.liveStatus.find(d => d.name === appState.user.name) || { mode: '通常' };
-  
-  // 表示するタスクの抽出
+/**
+ * [データ] いま表示している時数の「きょうのやること」リストを、計画の順で組み立てる。
+ * renderStudentDaily と pickTodayGoal / submitTaskProgress が同じ並びを使えるよう、
+ * 1か所にまとめている（計画順を正とし、未計画時は先生固定タスクを先頭に補う）。
+ * @returns {Array<Object>} 今日のタスク（順序どおり）
+ */
+function buildTodaysTasks() {
   const currentTasks = getCurrentUnitTasks();
   const myTasksFiltered = dataStore.myTasks.filter(t => t.unitId === appState.unit.id);
   const allTasks = [...currentTasks, ...myTasksFiltered];
-  
-  // 計画データの並び順を正としてタスクリストを構築する
+
   const hourKey = String(appState.unit.currentHour);
   const plannedIds = dataStore.studentPlan[hourKey] || [];
-  
-  // 表示用タスクリスト
-  let todaysTasks = [];
-  
+
+  const todaysTasks = [];
   // 1. 計画にあるタスクを「順序通り」に追加
   plannedIds.forEach(tid => {
     const t = allTasks.find(at => at.taskId === tid);
     if (t) todaysTasks.push(t);
   });
-
-  // 2. 計画に含まれていない「先生固定タスク」があれば先頭に追加 (未計画時の対応)
+  // 2. 計画に無い「先生固定タスク」は先頭に補う（未計画時の対応）
   const fixedTasks = allTasks.filter(t => t.format === 'teacher' && getStepNumber(t.step) === appState.unit.currentHour);
   fixedTasks.forEach(ft => {
-    // まだリストに含まれていなければ先頭に追加
-    if (!todaysTasks.some(t => t.taskId === ft.taskId)) {
-       todaysTasks.unshift(ft);
-    }
+    if (!todaysTasks.some(t => t.taskId === ft.taskId)) todaysTasks.unshift(ft);
   });
-  
-  // 合計時間を計算（timeが数値でないデータが混ざっても壊れないようにガード）
-  let totalTime = 0;
-  todaysTasks.forEach(t => totalTime += (Number(t.time) || 0));
-  
-  // 進捗バーの設定
-  const timePercent = Math.min((totalTime / CONSTANTS.UNIT_TIME) * 100, 100);
-  let timeColor = totalTime > CONSTANTS.UNIT_TIME ? 'bg-danger' : (totalTime > CONSTANTS.UNIT_TIME * 0.8 ? 'bg-warning' : 'bg-success');
-  
-  // タスクリストHTML生成
-  let taskListHtml = todaysTasks.length === 0 
-    ? `<div class="text-center py-5 text-muted"><p>計画が入っていません</p><button class="btn btn-outline-primary rounded-pill" onclick="setStudentViewMode('planning')">計画を立てる</button></div>` 
-    : todaysTasks.map(t => createStudentTaskCard(t)).join('');
-  
-  // 時数選択肢の生成
-  const effectiveHours = getEffectiveTotalHours();
-  let hourOptions = ''; 
-  for(let i = 1; i <= effectiveHours; i++) { 
-    hourOptions += `<option value="${i}" ${i === appState.unit.currentHour ? 'selected' : ''}>第${i}時</option>`; 
-  }
-  
-  // ステータスバッジ（SOSなど）
-  let stBadge = ''; let rstBtn = 'd-none';
-  if (myStat.mode === 'たすけて' || myStat.mode === 'sos') { 
-    stBadge = `<span class="badge bg-danger rounded-pill px-2 py-1 me-2 animate__animated animate__flash">SOS</span>`; rstBtn = ''; 
-  } else if (myStat.mode === 'しゅうちゅう' || myStat.mode === 'focus') { 
-    stBadge = `<span class="badge bg-info text-white rounded-pill px-2 py-1 me-2 animate__animated animate__pulse">集中</span>`; rstBtn = ''; 
-  }
-  
-  // 単元の目標表示
-  const currentUnit = appState.unitList.find(u => u.id === appState.unit.id) || {};
-  const goalHtml = currentUnit.goal 
-    ? `<div class="alert alert-success border-0 shadow-sm d-flex align-items-center py-2 px-3 mb-3 small">
-         <i class="bi bi-flag-fill text-success me-2 fs-5"></i>
-         <div class="fw-bold flex-grow-1">${escapeHtml(currentUnit.goal)}</div>
-       </div>` : '';
+  return todaysTasks;
+}
 
-  // メイン画面のHTML構築
+/** [判定] タスクが完了済みか */
+function cqTaskDone(t) {
+  const p = dataStore.studentProgress[t.taskId];
+  return !!(p && p.status === '完了');
+}
+
+/** [判定] 前提タスク未了でロックされているか */
+function cqTaskLocked(t) {
+  if (!t.prerequisites || t.prerequisites.length === 0) return false;
+  return !t.prerequisites.every(pid => {
+    const p = dataStore.studentProgress[pid];
+    return p && p.status === '完了';
+  });
+}
+
+/** [判定] このタスクにワークシート（みらいパスポート）があるか */
+function cqTaskHasWorksheet(t) {
+  return t.format !== 'teacher' && t.category !== 'マイタスク';
+}
+
+/** [色] カテゴリを cq アクセント（色ファミリー）へ対応づける */
+function cqCategoryAccent(cat) {
+  cat = cat || '';
+  if (cat.includes('まなぶ')) return 'blue';
+  if (cat.includes('ふかめる')) return 'orange';
+  if (cat.includes('まとめる')) return 'purple';
+  if (cat === 'マイタスク') return 'pink';
+  return 'cyan';
+}
+
+/** [色] カテゴリのアイコン（Bootstrap Icons） */
+function cqCategoryIcon(cat) {
+  cat = cat || '';
+  if (cat.includes('まなぶ')) return 'bi-book-half';
+  if (cat.includes('ふかめる')) return 'bi-search-heart';
+  if (cat.includes('まとめる')) return 'bi-journal-check';
+  if (cat === 'マイタスク') return 'bi-star-fill';
+  return 'bi-pencil-fill';
+}
+
+/** きょうの やることが「できた」に変わった瞬間を見つけるための記録（演出用） */
+let cqTodayWasPending = false;
+
+/**
+ * [動線] いま一番やってほしいこと「1つ」を、既存データだけから決める（優先の滝）。
+ *   ① この時数の計画が空 → けいかくを立てよう
+ *   ② 今日のリストに未完了がある → つぎは『◯◯』（ワークシートがあれば起動）
+ *   ③ ぜんぶ完了・ふりかえり未記入 → きょうのふりかえりを書こう
+ *   ④ ぜんぶ完了・ふりかえり済み → かんぺき！（押せない・お祝い）
+ * @param {Array<Object>} todaysTasks buildTodaysTasks() の結果
+ * @returns {{icon:string,label:string,title:string,note:string,accent:string,done?:boolean,go?:Function}}
+ */
+function pickTodayGoal(todaysTasks) {
+  const hourKey = String(appState.unit.currentHour);
+  const planned = dataStore.studentPlan[hourKey] || [];
+
+  // ① 計画が空（先生固定タスクも無い）→ 計画を立てる
+  if (planned.length === 0 && todaysTasks.length === 0) {
+    return {
+      icon: 'bi-calendar-plus', label: 'まず これ！',
+      title: 'けいかくを 立てよう',
+      note: 'きょう やることを えらぼう',
+      accent: 'blue',
+      go: () => setStudentViewMode('planning')
+    };
+  }
+
+  // ② 未完了のタスク（ロックされていない先頭を優先。全部ロックなら未完了の先頭）
+  const notDone = todaysTasks.filter(t => !cqTaskDone(t));
+  if (notDone.length > 0) {
+    const next = notDone.find(t => !cqTaskLocked(t)) || notDone[0];
+    const hasWs = cqTaskHasWorksheet(next);
+    return {
+      icon: 'bi-play-circle-fill', label: 'つぎは これ',
+      title: `『${next.title}』`,
+      note: hasWs ? 'タップして ワークシートを ひらこう' : 'タップして はじめよう',
+      accent: cqCategoryAccent(next.category),
+      go: () => {
+        if (hasWs) { launchPassport(next.taskId); return; }
+        // ワークシートが無いタスクは、そのカードへスクロールして目立たせる
+        const card = document.getElementById('cq-task-' + next.taskId);
+        if (card) {
+          card.scrollIntoView({ behavior: cqReducedMotion() ? 'auto' : 'smooth', block: 'center' });
+          cqPop(card);
+        } else {
+          openTaskDetailModal(next.taskId);
+        }
+      }
+    };
+  }
+
+  // ③ ぜんぶ完了・この時数のふりかえりが未記入 → ふりかえりを書く
+  const hourRef = dataStore.studentReflections && dataStore.studentReflections[appState.unit.currentHour];
+  const reflected = !!(hourRef && (hourRef.comment || hourRef.achievement || (hourRef.skills && hourRef.skills.length)));
+  if (todaysTasks.length > 0 && !reflected) {
+    return {
+      icon: 'bi-pencil-square', label: 'あと ひといき',
+      title: 'きょうの ふりかえりを 書こう',
+      note: 'かんたんな しつもんに 答えるだけ',
+      accent: 'orange',
+      go: () => openDailyReflectionModal()
+    };
+  }
+
+  // ④ ぜんぶ おわった
+  return {
+    done: true, icon: 'bi-trophy-fill', label: 'きょうは かんぺき！',
+    title: 'やること ぜんぶ できたね',
+    note: 'また あした がんばろう',
+    accent: 'green'
+  };
+}
+
+/** [画面描画] きょうの やることカード（大きな1つだけの案内） */
+function renderTodayGoalCard(todaysTasks) {
+  const goal = pickTodayGoal(todaysTasks);
+  // 「未完了 → 完了」に変わった瞬間だけ、カードがうなずいてお祝いする
+  const justDone = goal.done && cqTodayWasPending;
+  cqTodayWasPending = !goal.done;
+
+  const acc = goal.accent || 'blue';
+  const html = `
+    <div class="cq-accent-${escapeHtml(acc)}">
+      <button type="button" id="cq-today-card" class="cq-today${goal.done ? ' done' : ''}"${goal.done ? ' disabled aria-disabled="true"' : ''}>
+        <span class="cq-today-label"><i class="bi bi-stars" aria-hidden="true"></i>${escapeHtml(goal.label)}</span>
+        <span class="cq-today-title">
+          <span class="cq-today-emoji"><i class="bi ${escapeHtml(goal.icon)}" aria-hidden="true"></i></span>
+          <span>${escapeHtml(goal.title)}</span>
+        </span>
+        <span class="cq-today-note">${escapeHtml(goal.note)}</span>
+      </button>
+    </div>`;
+
+  const wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  const card = wrap.querySelector('.cq-today');
+  if (justDone) {
+    card.classList.add('just-done');
+    cqCelebrate(70);
+  }
+  if (goal.go) {
+    card.addEventListener('click', () => { cqPop(card); setTimeout(goal.go, 90); });
+  }
+  return wrap;
+}
+
+function renderStudentDaily() {
+  const container = document.getElementById('app-container');
+
+  // 自分のステータス（SOSなど）取得
+  const myStat = dataStore.liveStatus.find(d => d.name === appState.user.name) || { mode: '通常' };
+  const isSos = (myStat.mode === 'たすけて' || myStat.mode === 'sos');
+  const isFocus = (myStat.mode === 'しゅうちゅう' || myStat.mode === 'focus');
+
+  // 今日のタスク（計画順）
+  const todaysTasks = buildTodaysTasks();
+  const doneCount = todaysTasks.filter(cqTaskDone).length;
+  const totalCount = todaysTasks.length;
+  const donePercent = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
+
+  // ワークシートを持つ今日のタスク（とびら用）
+  const worksheetTask = todaysTasks.find(cqTaskHasWorksheet);
+
+  // 時数選択肢
+  const effectiveHours = getEffectiveTotalHours();
+  let hourOptions = '';
+  for (let i = 1; i <= effectiveHours; i++) {
+    hourOptions += `<option value="${i}" ${i === appState.unit.currentHour ? 'selected' : ''}>第${i}時</option>`;
+  }
+
+  // 単元タイトル・目標
+  const currentUnit = appState.unitList.find(u => u.id === appState.unit.id) || {};
+  const unitTitle = currentUnit.title || appState.unit.title || 'たんげん';
+
+  // ステータスバッジ（ヒーロー内）
+  let heroBadge = '';
+  if (isSos) heroBadge = `<span class="cq-hero-badge sos"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>SOS</span>`;
+  else if (isFocus) heroBadge = `<span class="cq-hero-badge focus"><i class="bi bi-headphones" aria-hidden="true"></i>しゅうちゅう</span>`;
+
+  // 進捗バーのラベル（かんぺき時はやさしく）
+  const barLabel = totalCount === 0
+    ? 'まだ やることが ありません'
+    : (doneCount >= totalCount ? 'きょうの がくしゅう ぜんぶ できたね！' : 'きょうの がくしゅう');
+
+  // タスクリスト
+  const taskListHtml = totalCount === 0
+    ? `<div class="cq-card cq-accent-blue"><div class="cq-card-body text-center py-4">
+         <div style="font-size:2.4rem;line-height:1" class="mb-2"><i class="bi bi-clipboard-heart text-primary" aria-hidden="true"></i></div>
+         <p class="fw-bold mb-3" style="color:var(--cq-ink-2)">この 時間の けいかくが まだ ないよ</p>
+         <button type="button" class="cq-btn cq-btn-block" onclick="setStudentViewMode('planning')"><i class="bi bi-calendar-plus" aria-hidden="true"></i>けいかくを 立てる</button>
+       </div></div>`
+    : `<div class="cq-stagger">${todaysTasks.map(t => createStudentTaskCard(t)).join('')}</div>`;
+
   container.innerHTML = `
-    ${goalHtml}
-    <!-- タイムライン・進捗バー -->
-    <div class="timeline-container shadow-sm p-3 mb-3 rounded-bottom border-bottom">
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <select class="form-select form-select-sm w-auto fw-bold text-primary border-0 bg-transparent" onchange="changeCurrentHour(this.value)">${hourOptions}</select>
-        <div class="small fw-bold ${totalTime > CONSTANTS.UNIT_TIME ? 'text-danger' : 'text-muted'}">${totalTime} / ${CONSTANTS.UNIT_TIME}分</div>
-      </div>
-      <div class="progress" style="height: 1.5rem;">
-        <div class="progress-bar progress-bar-striped ${timeColor}" role="progressbar" style="width: ${timePercent}%"></div>
-      </div>
-    </div>
-    
-    <div class="px-2">
-      <!-- ユーザー情報とツールボタン -->
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <div class="fw-bold text-primary me-2 text-truncate" style="max-width:150px;">
-          <i class="bi bi-person-circle me-1"></i>${escapeHtml(appState.user.name)}
-          <span class="badge bg-light text-secondary border ms-1">${escapeHtml(appState.user.classId)}</span>
-        </div>
-        <div class="d-flex gap-2">
-          <!-- [追加] ギャラリーウォークボタン -->
-          <button class="btn btn-warning btn-sm rounded-pill text-dark" onclick="renderGalleryWalk()" title="みんなの計画を見る">
-            <i class="bi bi-grid-3x3-gap-fill"></i> みんな
-          </button>
-          
-          <button class="btn btn-outline-success btn-sm rounded-pill" onclick="openDailyReflectionModal()"><i class="bi bi-pencil-square"></i> ふりかえり</button>
+    <div class="px-1 px-sm-2 pt-2">
+      <!-- あいさつヘッダー -->
+      <div class="cq-hero">
+        <div class="cq-hello"><span class="cq-hello-emoji"><i class="bi bi-emoji-smile-fill" aria-hidden="true"></i></span>こんにちは、${escapeHtml(appState.user.name)}さん！</div>
+        <div class="cq-hero-unit"><i class="bi bi-flag-fill" aria-hidden="true"></i>${escapeHtml(unitTitle)}</div>
+        <div class="cq-hero-row">
+          <label class="cq-hero-badge" style="cursor:pointer">
+            <i class="bi bi-clock-fill" aria-hidden="true"></i>
+            <select class="cq-hour-select" onchange="changeCurrentHour(this.value)" aria-label="なんじかんめ">${hourOptions}</select>
+          </label>
+          ${heroBadge}
         </div>
       </div>
-      
-      <!-- ステータスボタン (SOS/集中) -->
-      <div class="d-flex justify-content-end align-items-center mb-2">
-        ${stBadge}
-        <div class="d-flex gap-1">
-          <button class="btn btn-danger btn-sm rounded-pill px-3" onclick="submitUserStatus('たすけて')">SOS</button>
-          <button class="btn btn-info btn-sm rounded-pill px-3 text-white" onclick="submitUserStatus('しゅうちゅう')">集中</button>
-          <button class="btn btn-secondary btn-sm rounded-pill px-3 ${rstBtn}" onclick="submitUserStatus('通常')">解除</button>
-        </div>
+
+      <!-- きょうの やること（大きな1つ） -->
+      <div id="cq-today-slot"></div>
+
+      <!-- きょうの がくしゅう（進捗バー） -->
+      <div class="cq-bar-wrap">
+        <div class="cq-bar-label"><span>${escapeHtml(barLabel)}</span><span class="cq-bar-count"><span id="cq-done-num">0</span> / ${totalCount}</span></div>
+        <div class="cq-bar" id="cq-progress-bar"><span style="width:0%"></span></div>
       </div>
-      
-      <!-- タスクリスト -->
-      ${taskListHtml}
-      
-      <div class="d-grid gap-2 mb-4 mt-3">
-        <button class="btn btn-outline-primary border-2 border-dashed py-3 rounded-4" onclick="openMyTaskModal()">
-          <i class="bi bi-plus-circle-fill me-2"></i>じぶんの<ruby>課題<rt>かだい</rt></ruby>
+
+      <!-- 大きな色わけとびら -->
+      <div class="cq-doors">
+        <button type="button" class="cq-door door-blue" onclick="cqDoorGo(this,()=>setStudentViewMode('planning'))">
+          <span class="cq-door-icon"><i class="bi bi-calendar-range" aria-hidden="true"></i></span>
+          <span class="cq-door-body"><span class="cq-door-title">けいかく</span><span class="cq-door-note">きょう やることを きめる</span></span>
+          <span class="cq-door-arrow"><i class="bi bi-chevron-right" aria-hidden="true"></i></span>
         </button>
+        <button type="button" class="cq-door door-purple" onclick="cqDoorGo(this,()=>setStudentViewMode('portfolio'))">
+          <span class="cq-door-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span>
+          <span class="cq-door-body"><span class="cq-door-title">ポートフォリオ</span><span class="cq-door-note">がんばりを ふりかえる</span></span>
+          <span class="cq-door-arrow"><i class="bi bi-chevron-right" aria-hidden="true"></i></span>
+        </button>
+        <button type="button" class="cq-door door-pink" onclick="cqDoorGo(this,()=>setStudentViewMode('plaza'))">
+          <span class="cq-door-icon"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+          <span class="cq-door-body"><span class="cq-door-title">ひろば</span><span class="cq-door-note">みんなの ようすを みる</span></span>
+          <span class="cq-door-arrow"><i class="bi bi-chevron-right" aria-hidden="true"></i></span>
+        </button>
+        ${worksheetTask ? `<button type="button" class="cq-door door-green" onclick="cqDoorGo(this,()=>launchPassport('${escJs(worksheetTask.taskId)}'))">
+          <span class="cq-door-icon"><i class="bi bi-rocket-takeoff-fill" aria-hidden="true"></i></span>
+          <span class="cq-door-body"><span class="cq-door-title">ワークシート</span><span class="cq-door-note">みらいパスポートで まなぶ</span></span>
+          <span class="cq-door-arrow"><i class="bi bi-chevron-right" aria-hidden="true"></i></span>
+        </button>` : ''}
+      </div>
+
+      <!-- ステータス（SOS / しゅうちゅう） -->
+      <div class="cq-section-title"><span class="cq-section-emoji"><i class="bi bi-hand-thumbs-up-fill" aria-hidden="true"></i></span>いまの きもち</div>
+      <div class="d-flex flex-wrap gap-2 mb-2">
+        <button type="button" class="cq-btn cq-btn-pink" onclick="submitUserStatus('たすけて')"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>SOS</button>
+        <button type="button" class="cq-btn cq-btn-purple" onclick="submitUserStatus('しゅうちゅう')"><i class="bi bi-headphones" aria-hidden="true"></i>しゅうちゅう</button>
+        <button type="button" class="cq-btn cq-btn-ghost ${(isSos||isFocus)?'':'d-none'}" onclick="submitUserStatus('通常')"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>もどす</button>
+      </div>
+
+      <!-- きょうの やること 一覧 -->
+      <div class="cq-section-title"><span class="cq-section-emoji"><i class="bi bi-list-check" aria-hidden="true"></i></span>きょうの やること</div>
+      ${taskListHtml}
+
+      <div class="d-grid gap-2 mt-2 mb-3">
+        <button type="button" class="cq-btn cq-btn-ghost cq-btn-block" onclick="openMyTaskModal()"><i class="bi bi-plus-circle-fill" aria-hidden="true"></i>じぶんの かだいを つくる</button>
+        <div class="d-flex gap-2">
+          <button type="button" class="cq-btn cq-btn-gold cq-btn-block" onclick="renderGalleryWalk()"><i class="bi bi-grid-3x3-gap-fill" aria-hidden="true"></i>みんなの けいかく</button>
+          <button type="button" class="cq-btn cq-btn-orange cq-btn-block" onclick="openDailyReflectionModal()"><i class="bi bi-pencil-square" aria-hidden="true"></i>ふりかえり</button>
+        </div>
       </div>
     </div>`;
+
+  // きょうの やることカードを差し込む（イベント付きなので DOM で組み立てる）
+  const slot = document.getElementById('cq-today-slot');
+  if (slot) slot.appendChild(renderTodayGoalCard(todaysTasks));
+
+  // 進捗バーを、少し遅らせてのびるように（数字はカウントアップ）
+  const bar = document.getElementById('cq-progress-bar');
+  const numEl = document.getElementById('cq-done-num');
+  if (bar) {
+    const span = bar.querySelector('span');
+    if (doneCount > 0) bar.classList.add('grew');
+    requestAnimationFrame(() => { if (span) span.style.width = donePercent + '%'; });
+  }
+  if (numEl) cqCountUp(numEl, doneCount);
 }
 
 /**
- * [HTML生成] タスクカード1枚分のHTMLを作成
+ * [演出] とびらを押したときの共通処理（沈み込み＋光＋矢印）→ 少し待って遷移。
+ * @param {HTMLElement} el 押されたとびら
+ * @param {Function} go 遷移処理
+ */
+function cqDoorGo(el, go) {
+  if (!el || cqReducedMotion()) { go(); return; }
+  el.classList.remove('tapped');
+  void el.offsetWidth;
+  el.classList.add('tapped');
+  setTimeout(go, 180);
+}
+
+/**
+ * [HTML生成] タスクカード1枚分（cq-card デザイン）。
+ * 上に色帯・左に大きなアイコンチップ・大きな「できた」ボタン。
  */
 function createStudentTaskCard(t) {
   const prog = dataStore.studentProgress[t.taskId] || {};
   const stamp = dataStore.studentFeedback[t.taskId];
-  const isDone = prog.status === '完了'; 
+  const isDone = prog.status === '完了';
   const isDoing = prog.status === '途中';
-  
-  // ロック判定（前提タスクが終わっていない場合）
-  let isLocked = false;
-  if (t.prerequisites && t.prerequisites.length > 0) {
-    const allPreDone = t.prerequisites.every(pid => (dataStore.studentProgress[pid] && dataStore.studentProgress[pid].status === '完了'));
-    if (!allPreDone) isLocked = true;
-  }
-  
-  const cardClass = isLocked ? 'card-locked' : '';
-  const borderClass = getCategoryColorClass(t.category);
-  
-  // 先生からのスタンプ表示
-  let stampHtml = stamp ? `<div class="stamp-badge animate__animated animate__bounceIn">${{'check':'✅','good':'👍','great':'💮','support':'🚩'}[stamp]||''}</div>` : '';
-  
-  // ワークシートボタン（児童用フォーマットのタスクで表示）
+  const isLocked = cqTaskLocked(t);
+  const acc = cqCategoryAccent(t.category);
+  const catIcon = cqCategoryIcon(t.category);
+
+  // 先生からのスタンプ
+  const stampHtml = stamp
+    ? `<div class="stamp-badge animate__animated animate__bounceIn">${{'check':'✅','good':'👍','great':'💮','support':'🚩'}[stamp] || ''}</div>`
+    : '';
+
+  // ワークシート起動ボタン
   let passportBtn = '';
-  if (t.format !== 'teacher' && t.category !== 'マイタスク') {
-    passportBtn = `<button class="btn btn-primary rounded-pill px-3 btn-sm fw-bold me-1 shadow-sm" onclick="event.stopPropagation(); launchPassport('${escJs(t.taskId)}')" title="みらいパスポートで学習する"><i class="bi bi-rocket-takeoff-fill" aria-hidden="true"></i></button>`;
+  if (cqTaskHasWorksheet(t)) {
+    passportBtn = `<button type="button" class="cq-btn cq-btn-purple" style="min-height:2.6rem;padding:.4rem 1rem;font-size:.9rem" onclick="event.stopPropagation(); launchPassport('${escJs(t.taskId)}')" title="みらいパスポートで学習する"><i class="bi bi-rocket-takeoff-fill" aria-hidden="true"></i>ワークシート</button>`;
   }
 
-  // アクションボタン（完了/途中/Passport）
+  // アクションボタン
   let actionBtn = '';
-  if (isDone) { 
-    actionBtn = `<button class="btn btn-secondary rounded-pill px-3 btn-sm fw-bold" disabled>完了</button>`; 
+  if (isDone) {
+    actionBtn = `<button type="button" class="cq-btn cq-btn-green" style="min-height:2.6rem;padding:.4rem 1.1rem;font-size:.92rem" disabled><i class="bi bi-check-circle-fill" aria-hidden="true"></i>できた</button>`;
   } else {
-    const doingBtn = isDoing ? 'btn-warning text-dark' : 'btn-outline-warning text-dark';
-    let buttons = `<button class="btn btn-outline-success rounded-pill px-3 btn-sm fw-bold" onclick="event.stopPropagation(); submitTaskProgress('${escJs(t.taskId)}','完了',this)">できた</button>`;
-
+    const doneBtn = `<button type="button" class="cq-btn cq-btn-green" style="min-height:2.6rem;padding:.4rem 1.1rem;font-size:.95rem" onclick="event.stopPropagation(); submitTaskProgress('${escJs(t.taskId)}','完了',this)">できた！</button>`;
     if (t.format !== 'teacher') {
-       buttons = `<button class="btn ${doingBtn} rounded-pill px-3 btn-sm fw-bold me-1" onclick="event.stopPropagation(); submitTaskProgress('${escJs(t.taskId)}','途中',this)">途中</button>` + buttons;
-       actionBtn = passportBtn + buttons;
+      const doingCls = isDoing ? 'cq-btn-orange' : 'cq-btn-ghost';
+      const doingBtn = `<button type="button" class="cq-btn ${doingCls}" style="min-height:2.6rem;padding:.4rem .9rem;font-size:.9rem" onclick="event.stopPropagation(); submitTaskProgress('${escJs(t.taskId)}','途中',this)">とちゅう</button>`;
+      actionBtn = passportBtn + doingBtn + doneBtn;
     } else {
-       actionBtn = buttons;
+      actionBtn = doneBtn;
     }
   }
-  if (t.format === 'teacher') actionBtn = `<span class="badge bg-info text-white me-2">先生</span>` + actionBtn;
+
+  const teacherTag = t.format === 'teacher' ? `<span class="cq-tag" style="--cq-accent-color:var(--cq-cyan-d);--cq-accent-soft:var(--cq-cyan-s)"><i class="bi bi-mortarboard-fill" aria-hidden="true"></i>先生</span>` : '';
+  const doingTag = (isDoing && !isDone) ? `<span class="cq-tag" style="--cq-accent-color:var(--cq-orange-d);--cq-accent-soft:var(--cq-orange-s)"><i class="bi bi-hourglass-split" aria-hidden="true"></i>とちゅう</span>` : '';
+
+  const lockOverlay = isLocked
+    ? `<div class="position-absolute top-50 start-50 translate-middle text-center" style="z-index:2"><i class="bi bi-lock-fill fs-1 text-secondary" aria-hidden="true"></i><br><span class="cq-tag" style="--cq-accent-color:var(--cq-muted);--cq-accent-soft:#eceff2">まだ ひらけないよ</span></div>`
+    : '';
 
   return `
-    <div class="card shadow-sm mb-3 card-task ${cardClass} ${borderClass} position-relative" style="cursor:pointer;" onclick="openTaskDetailModal('${escJs(t.taskId)}')">
+    <div id="cq-task-${escapeHtml(t.taskId)}" class="cq-card cq-accent-${acc}${isDone ? ' done' : ''}${isLocked ? ' locked' : ''} position-relative" style="cursor:pointer" onclick="openTaskDetailModal('${escJs(t.taskId)}')">
       ${stampHtml}
-      ${isLocked ? `<div class="position-absolute top-50 start-50 translate-middle text-center" style="z-index:2"><i class="bi bi-lock-fill fs-1 text-secondary"></i><br><span class="badge bg-secondary">ロック中</span></div>` : ''}
-      <div class="card-body">
-        <div class="d-flex justify-content-end align-items-center mb-2">
-           <div class="text-end"><span class="badge bg-light text-secondary border">${escapeHtml(t.time)}分</span></div>
+      ${lockOverlay}
+      <div class="cq-card-head">
+        <span class="cq-card-icon"><i class="bi ${catIcon}" aria-hidden="true"></i></span>
+        <div class="cq-card-head-body">
+          <h5 class="cq-card-title">${escapeHtml(t.title)}</h5>
+          <div class="cq-card-note"><i class="bi bi-clock" aria-hidden="true"></i> ${escapeHtml(t.time)}分・${escapeHtml(t.category)}</div>
         </div>
-        <h5 class="fw-bold mb-2">${escapeHtml(t.title)}</h5>
-        <div class="d-flex justify-content-between align-items-center mt-1">
-          <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${escapeHtml(t.category)}</span>
-          <div class="text-end">${actionBtn}</div>
+        ${isDone ? `<span class="cq-card-icon" style="--cq-accent-color:var(--cq-green-d);--cq-accent-soft:var(--cq-green-s)"><i class="bi bi-check-lg" aria-hidden="true"></i></span>` : ''}
+      </div>
+      <div class="cq-card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div class="d-flex flex-wrap gap-1">${teacherTag}${doingTag}</div>
+          <div class="d-flex flex-wrap gap-2 justify-content-end">${actionBtn}</div>
         </div>
       </div>
     </div>`;
@@ -663,18 +881,16 @@ function renderStudentPlanning() {
   const container = document.getElementById('app-container');
   container.innerHTML = `
     <div class="p-3 d-flex flex-column h-100">
-      <div class="d-flex justify-content-between align-items-center mb-3 flex-shrink-0">
-        <div class="d-flex align-items-center">
-          <h5 class="fw-bold m-0 me-3"><i class="bi bi-calendar-range me-2 text-primary"></i><ruby>計画<rt>けいかく</rt></ruby>モード</h5>
-          <!-- 総時数の変更ボタン -->
-          <div class="input-group input-group-sm w-auto">
-            <span class="input-group-text bg-white">全</span>
-            <input type="text" class="form-control text-center fw-bold bg-white" value="${effectiveHours}" style="width:40px;" readonly>
-            <button class="btn btn-outline-secondary" onclick="changeStudentTotalHours(1)"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
-            <button class="btn btn-outline-secondary" onclick="changeStudentTotalHours(-1)"><i class="bi bi-dash-lg" aria-hidden="true"></i></button>
-          </div>
+      <div class="cq-hero mb-3 flex-shrink-0" style="background:linear-gradient(135deg,#4f8ef7 0%,#3a78d8 100%)">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <div class="cq-hello"><span class="cq-hello-emoji"><i class="bi bi-calendar-range" aria-hidden="true"></i></span>けいかくを 立てよう</div>
+          <button type="button" class="cq-btn cq-btn-green" onclick="setStudentViewMode('daily')"><i class="bi bi-check-lg" aria-hidden="true"></i>できた</button>
         </div>
-        <button class="btn btn-primary rounded-pill px-4 shadow-sm" onclick="setStudentViewMode('daily')"><ruby>完了<rt>かんりょう</rt></ruby></button>
+        <div class="cq-hero-row">
+          <span class="cq-hero-badge"><i class="bi bi-clock-fill" aria-hidden="true"></i>ぜんぶで ${effectiveHours}時間</span>
+          <button type="button" class="cq-hero-badge" style="border:0;cursor:pointer" onclick="changeStudentTotalHours(1)" aria-label="時間をふやす"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
+          <button type="button" class="cq-hero-badge" style="border:0;cursor:pointer" onclick="changeStudentTotalHours(-1)" aria-label="時間をへらす"><i class="bi bi-dash-lg" aria-hidden="true"></i></button>
+        </div>
       </div>
       <!-- 100vh はモバイルのアドレスバー分だけはみ出すので dvh を使う。
            dvh を知らない古い端末では、下の @supports で 100vh に戻る。 -->
@@ -799,10 +1015,9 @@ function syncStudentPlan() {
  * [アクション] 課題の進捗を更新（できた・途中）
  */
 function submitTaskProgress(taskId, status, btnElement) {
-  if (status === '完了') {
-    btnElement.className = "btn btn-secondary rounded-pill px-4 btn-sm fw-bold animate__animated animate__heartBeat";
-    btnElement.innerHTML = `<i class="bi bi-check-circle-fill me-1"></i><ruby>完了<rt>かんりょう</rt></ruby>`; 
+  if (status === '完了' && btnElement) {
     btnElement.disabled = true;
+    btnElement.innerHTML = `<i class="bi bi-check-circle-fill" aria-hidden="true"></i>できた`;
   }
   const allTasks = [...dataStore.masterTasks, ...dataStore.myTasks];
   const t = allTasks.find(x => x.taskId === taskId);
@@ -811,14 +1026,30 @@ function submitTaskProgress(taskId, status, btnElement) {
   if (!dataStore.studentProgress[taskId]) dataStore.studentProgress[taskId] = {};
   dataStore.studentProgress[taskId].status = status;
   const mem = dataStore.studentProgress[taskId].reflection || "";
-  
-  // サーバーへ送信
+
+  // サーバーへ送信（保存に成功したら演出する）
   google.script.run
     .withFailureHandler(err => console.error(err))
     .updateStatus(appState.user.name, t.taskId, t.title, status, '通常', mem, appState.user.classId, appState.unit.id);
-  
-  if (status === '途中') showToast('info', '途中経過を保存しました');
-  if (status === '完了') setTimeout(renderStudentView, 1000); // 1秒後に画面更新
+
+  if (status === '途中') { showToast('info', 'とちゅうまで ほぞんしたよ'); return; }
+
+  if (status === '完了') {
+    // このカードを「ぷるっ」とさせて、紙ふぶきでお祝いする
+    const card = document.getElementById('cq-task-' + taskId);
+    cqPop(card || btnElement);
+
+    // きょうのタスクが「これで ぜんぶ完了」になったか判定する
+    const todays = buildTodaysTasks();
+    const remaining = todays.filter(x => !cqTaskDone(x)).length;
+    if (todays.length > 0 && remaining === 0) {
+      cqCelebrate(110);
+      cqCheer('ぜんぶ できたね！', 'きょうも よくがんばりました');
+    } else {
+      cqCelebrate(45);
+    }
+    setTimeout(renderStudentView, 1000); // 1秒後に画面更新
+  }
 }
 
 /**
@@ -1246,9 +1477,9 @@ function renderStudentPortfolio() {
 
   container.innerHTML = `
     <div class="px-2 pt-2">
-      <div class="d-flex align-items-center mb-3">
-        <h5 class="fw-bold m-0 text-primary"><i class="bi bi-journal-text me-2"></i><ruby>記録<rt>きろく</rt></ruby>（ポートフォリオ）</h5>
-        <span class="badge bg-light text-secondary border ms-2">${escapeHtml(appState.user.name)}</span>
+      <div class="cq-hero mb-3" style="background:linear-gradient(135deg,#9a8bff 0%,#6d28d9 100%)">
+        <div class="cq-hello"><span class="cq-hello-emoji"><i class="bi bi-journal-text" aria-hidden="true"></i></span>${escapeHtml(appState.user.name)}さんの きろく</div>
+        <div class="cq-hero-unit"><i class="bi bi-stars" aria-hidden="true"></i>がんばりを ふりかえろう</div>
       </div>
 
       <!-- 発揮した力（レーダー） -->
@@ -1267,7 +1498,7 @@ function renderStudentPortfolio() {
           <div class="small fw-bold text-muted mb-2"><i class="bi bi-pencil-square me-1"></i>この<ruby>単元<rt>たんげん</rt></ruby>のまとめ</div>
           <div class="small text-muted mb-2">学んだこと、できるようになったことを書きましょう。</div>
           <textarea id="pf-summary" class="form-control bg-light border-0" rows="6" placeholder="ここにまとめを書こう...">${escapeHtml(summary)}</textarea>
-          <button class="btn btn-primary rounded-pill w-100 mt-3" onclick="saveSummary()"><ruby>保存<rt>ほぞん</rt></ruby>する</button>
+          <button type="button" class="cq-btn cq-btn-purple cq-btn-block mt-3" onclick="saveSummary()"><i class="bi bi-save" aria-hidden="true"></i>ほぞんする</button>
           ${feedbackHtml}
         </div>
       </div>
@@ -1375,13 +1606,13 @@ function renderStudentPlaza() {
   const container = document.getElementById('app-container');
   container.innerHTML = `
     <div class="px-2 pt-2">
-      <div class="d-flex align-items-center mb-3">
-        <h5 class="fw-bold m-0 text-primary"><i class="bi bi-people-fill me-2"></i>ひろば</h5>
-        <span class="small text-muted ms-2">みんなの ワークシートを みてみよう</span>
+      <div class="cq-hero mb-3" style="background:linear-gradient(135deg,#f472a0 0%,#e94b83 100%)">
+        <div class="cq-hello"><span class="cq-hello-emoji"><i class="bi bi-people-fill" aria-hidden="true"></i></span>ひろば</div>
+        <div class="cq-hero-unit"><i class="bi bi-eye-fill" aria-hidden="true"></i>みんなの ワークシートを みてみよう</div>
       </div>
-      <div class="card border-0 shadow-sm rounded-4 mb-3">
-        <div class="card-body">
-          <label class="small fw-bold text-muted d-block mb-2" for="plaza-task-select">ワークシートを えらぶ</label>
+      <div class="cq-card cq-accent-pink mb-3">
+        <div class="cq-card-body">
+          <label class="cq-card-note fw-bold d-block mb-2" for="plaza-task-select">ワークシートを えらぶ</label>
           <div id="plaza-picker">
             <div class="text-center text-muted py-3"><div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>よみこみ中...</div>
           </div>
