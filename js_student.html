@@ -59,7 +59,7 @@ function renderNameEntry() {
           <button class="btn btn-primary btn-lg w-100 rounded-pill shadow-sm" onclick="handleLoginClick()">スタート</button>
           
           <div class="mt-4">
-             <button class="btn btn-link text-muted btn-sm" onclick="attemptTeacherLogin()">先生はこちら</button>
+             <button class="btn btn-link text-muted btn-sm" onclick="attemptTeacherLogin()"><ruby>先生<rt>せんせい</rt></ruby>はこちら</button>
           </div>
         </div>
       </div>
@@ -402,7 +402,7 @@ function pickTodayGoal(todaysTasks) {
   if (planned.length === 0 && todaysTasks.length === 0) {
     return {
       icon: 'bi-calendar-plus', label: 'まず これ！',
-      title: 'けいかくを 立てよう',
+      title: 'けいかくを たてよう',
       note: 'きょう やることを えらぼう',
       accent: 'blue',
       go: () => setStudentViewMode('planning')
@@ -439,8 +439,8 @@ function pickTodayGoal(todaysTasks) {
   if (todaysTasks.length > 0 && !reflected) {
     return {
       icon: 'bi-pencil-square', label: 'あと ひといき',
-      title: 'きょうの ふりかえりを 書こう',
-      note: 'かんたんな しつもんに 答えるだけ',
+      title: 'きょうの ふりかえりを かこう',
+      note: 'かんたんな しつもんに こたえるだけ',
       accent: 'orange',
       go: () => openDailyReflectionModal()
     };
@@ -502,14 +502,11 @@ function renderStudentDaily() {
   const totalCount = todaysTasks.length;
   const donePercent = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
 
-  // ワークシートを持つ今日のタスク（とびら用）
-  const worksheetTask = todaysTasks.find(cqTaskHasWorksheet);
-
-  // 時数選択肢
+  // 時数選択肢（<option> の中は HTML 不可＝ルビが振れないため、ひらがな表記にする）
   const effectiveHours = getEffectiveTotalHours();
   let hourOptions = '';
   for (let i = 1; i <= effectiveHours; i++) {
-    hourOptions += `<option value="${i}" ${i === appState.unit.currentHour ? 'selected' : ''}>第${i}時</option>`;
+    hourOptions += `<option value="${i}" ${i === appState.unit.currentHour ? 'selected' : ''}>${i}じかんめ</option>`;
   }
 
   // 単元タイトル・目標
@@ -530,8 +527,8 @@ function renderStudentDaily() {
   const taskListHtml = totalCount === 0
     ? `<div class="cq-card cq-accent-blue"><div class="cq-card-body text-center py-4">
          <div style="font-size:2.4rem;line-height:1" class="mb-2"><i class="bi bi-clipboard-heart text-primary" aria-hidden="true"></i></div>
-         <p class="fw-bold mb-3" style="color:var(--cq-ink-2)">この 時間の けいかくが まだ ないよ</p>
-         <button type="button" class="cq-btn cq-btn-block" onclick="setStudentViewMode('planning')"><i class="bi bi-calendar-plus" aria-hidden="true"></i>けいかくを 立てる</button>
+         <p class="fw-bold mb-3" style="color:var(--cq-ink-2)">この <ruby>時間<rt>じかん</rt></ruby>の けいかくが まだ ないよ</p>
+         <button type="button" class="cq-btn cq-btn-block" onclick="setStudentViewMode('planning')"><i class="bi bi-calendar-plus" aria-hidden="true"></i>けいかくを たてる</button>
        </div></div>`
     : `<div class="cq-stagger">${todaysTasks.map(t => createStudentTaskCard(t)).join('')}</div>`;
 
@@ -559,29 +556,9 @@ function renderStudentDaily() {
         <div class="cq-bar" id="cq-progress-bar"><span style="width:0%"></span></div>
       </div>
 
-      <!-- 大きな色わけとびら -->
-      <div class="cq-doors">
-        <button type="button" class="cq-door door-blue" onclick="cqDoorGo(this,()=>setStudentViewMode('planning'))">
-          <span class="cq-door-icon"><i class="bi bi-calendar-range" aria-hidden="true"></i></span>
-          <span class="cq-door-body"><span class="cq-door-title">けいかく</span><span class="cq-door-note">きょう やることを きめる</span></span>
-          <span class="cq-door-arrow"><i class="bi bi-chevron-right" aria-hidden="true"></i></span>
-        </button>
-        <button type="button" class="cq-door door-purple" onclick="cqDoorGo(this,()=>setStudentViewMode('portfolio'))">
-          <span class="cq-door-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span>
-          <span class="cq-door-body"><span class="cq-door-title">ポートフォリオ</span><span class="cq-door-note">がんばりを ふりかえる</span></span>
-          <span class="cq-door-arrow"><i class="bi bi-chevron-right" aria-hidden="true"></i></span>
-        </button>
-        <button type="button" class="cq-door door-pink" onclick="cqDoorGo(this,()=>setStudentViewMode('plaza'))">
-          <span class="cq-door-icon"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
-          <span class="cq-door-body"><span class="cq-door-title">ひろば</span><span class="cq-door-note">みんなの ようすを みる</span></span>
-          <span class="cq-door-arrow"><i class="bi bi-chevron-right" aria-hidden="true"></i></span>
-        </button>
-        ${worksheetTask ? `<button type="button" class="cq-door door-green" onclick="cqDoorGo(this,()=>launchPassport('${escJs(worksheetTask.taskId)}'))">
-          <span class="cq-door-icon"><i class="bi bi-rocket-takeoff-fill" aria-hidden="true"></i></span>
-          <span class="cq-door-body"><span class="cq-door-title">ワークシート</span><span class="cq-door-note">みらいパスポートで まなぶ</span></span>
-          <span class="cq-door-arrow"><i class="bi bi-chevron-right" aria-hidden="true"></i></span>
-        </button>` : ''}
-      </div>
+      <!-- ※以前ここにあった「けいかく／ポートフォリオ／ひろば」のとびらは、
+           下部タブと完全に重複していたため削除した（ワークシートも上のゴールカードと
+           課題カードのボタンから開ける）。課題リストが1画面に収まりやすくなる。 -->
 
       <!-- ステータス（SOS / しゅうちゅう） -->
       <div class="cq-section-title"><span class="cq-section-emoji"><i class="bi bi-hand-thumbs-up-fill" aria-hidden="true"></i></span>いまの きもち</div>
@@ -620,19 +597,6 @@ function renderStudentDaily() {
 }
 
 /**
- * [演出] とびらを押したときの共通処理（沈み込み＋光＋矢印）→ 少し待って遷移。
- * @param {HTMLElement} el 押されたとびら
- * @param {Function} go 遷移処理
- */
-function cqDoorGo(el, go) {
-  if (!el || cqReducedMotion()) { go(); return; }
-  el.classList.remove('tapped');
-  void el.offsetWidth;
-  el.classList.add('tapped');
-  setTimeout(go, 180);
-}
-
-/**
  * [HTML生成] タスクカード1枚分（cq-card デザイン）。
  * 上に色帯・左に大きなアイコンチップ・大きな「できた」ボタン。
  */
@@ -653,7 +617,7 @@ function createStudentTaskCard(t) {
   // ワークシート起動ボタン
   let passportBtn = '';
   if (cqTaskHasWorksheet(t)) {
-    passportBtn = `<button type="button" class="cq-btn cq-btn-purple" style="min-height:2.6rem;padding:.4rem 1rem;font-size:.9rem" onclick="event.stopPropagation(); launchPassport('${escJs(t.taskId)}')" title="みらいパスポートで学習する"><i class="bi bi-rocket-takeoff-fill" aria-hidden="true"></i>ワークシート</button>`;
+    passportBtn = `<button type="button" class="cq-btn cq-btn-purple" style="min-height:2.6rem;padding:.4rem 1rem;font-size:.9rem" onclick="event.stopPropagation(); launchPassport('${escJs(t.taskId)}')" title="ワークシートを ひらく"><i class="bi bi-rocket-takeoff-fill" aria-hidden="true"></i>ワークシート</button>`;
   }
 
   // アクションボタン
@@ -671,7 +635,7 @@ function createStudentTaskCard(t) {
     }
   }
 
-  const teacherTag = t.format === 'teacher' ? `<span class="cq-tag" style="--cq-accent-color:var(--cq-cyan-d);--cq-accent-soft:var(--cq-cyan-s)"><i class="bi bi-mortarboard-fill" aria-hidden="true"></i>先生</span>` : '';
+  const teacherTag = t.format === 'teacher' ? `<span class="cq-tag" style="--cq-accent-color:var(--cq-cyan-d);--cq-accent-soft:var(--cq-cyan-s)"><i class="bi bi-mortarboard-fill" aria-hidden="true"></i><ruby>先生<rt>せんせい</rt></ruby></span>` : '';
   const doingTag = (isDoing && !isDone) ? `<span class="cq-tag" style="--cq-accent-color:var(--cq-orange-d);--cq-accent-soft:var(--cq-orange-s)"><i class="bi bi-hourglass-split" aria-hidden="true"></i>とちゅう</span>` : '';
 
   const lockOverlay = isLocked
@@ -686,7 +650,7 @@ function createStudentTaskCard(t) {
         <span class="cq-card-icon"><i class="bi ${catIcon}" aria-hidden="true"></i></span>
         <div class="cq-card-head-body">
           <h5 class="cq-card-title">${escapeHtml(t.title)}</h5>
-          <div class="cq-card-note"><i class="bi bi-clock" aria-hidden="true"></i> ${escapeHtml(t.time)}分・${escapeHtml(t.category)}</div>
+          <div class="cq-card-note"><i class="bi bi-clock" aria-hidden="true"></i> ${escapeHtml(t.time)}<ruby>分<rt>ふん</rt></ruby>・${escapeHtml(t.category)}</div>
         </div>
         ${isDone ? `<span class="cq-card-icon" style="--cq-accent-color:var(--cq-green-d);--cq-accent-soft:var(--cq-green-s)"><i class="bi bi-check-lg" aria-hidden="true"></i></span>` : ''}
       </div>
@@ -768,7 +732,7 @@ function renderGalleryWalk() {
     let planContentHtml = '';
     
     if (!plan) {
-      planContentHtml = `<div class="text-center text-muted small py-4">まだ計画がありません</div>`;
+      planContentHtml = `<div class="text-center text-muted small py-4">まだ <ruby>計画<rt>けいかく</rt></ruby>が ないよ</div>`;
     } else {
       // 1時間目～総時数までの計画を可視化
       const totalHours = appState.unit.totalHours; // 共通時数を使用
@@ -823,17 +787,17 @@ function renderGalleryWalk() {
   // 届いたら静かに描き直すので、待ち時間はない。
   if (Date.now() - galleryLastFetch > 10000) refreshGalleryData();
 
-  const anonBtnText = isGalleryAnonymous ? '<i class="bi bi-eye"></i> 名前をみる' : '<i class="bi bi-eye-slash"></i> 名前をかくす';
+  const anonBtnText = isGalleryAnonymous ? '<i class="bi bi-eye"></i> <ruby>名前<rt>なまえ</rt></ruby>をみる' : '<i class="bi bi-eye-slash"></i> <ruby>名前<rt>なまえ</rt></ruby>をかくす';
   const anonBtnClass = isGalleryAnonymous ? 'btn-outline-secondary' : 'btn-secondary';
 
   container.innerHTML = `
     <div class="d-flex flex-column h-100 p-2">
       <!-- ヘッダー -->
       <div class="d-flex justify-content-between align-items-center mb-3">
-        <h5 class="fw-bold m-0 text-primary"><i class="bi bi-grid-3x3-gap-fill me-2"></i>みんなの計画</h5>
+        <h5 class="fw-bold m-0 text-primary"><i class="bi bi-grid-3x3-gap-fill me-2"></i>みんなの <ruby>計画<rt>けいかく</rt></ruby></h5>
         <div class="d-flex gap-2">
           <button class="btn ${anonBtnClass} btn-sm rounded-pill" onclick="toggleGalleryNames()">${anonBtnText}</button>
-          <button class="btn btn-outline-primary btn-sm rounded-pill" onclick="setStudentViewMode('daily')">戻る</button>
+          <button class="btn btn-outline-primary btn-sm rounded-pill" onclick="setStudentViewMode('daily')">もどる</button>
         </div>
       </div>
       
@@ -878,7 +842,7 @@ function renderStudentPlanning() {
   const allTasks = [...currentTasks, ...myTasksFiltered];
   
   // 【左側】タスクプール（選択肢）
-  let taskPoolHtml = `<div class="d-grid gap-2 mb-3 sticky-top bg-white pt-2 pb-2 border-bottom" style="top:0; z-index:5;"><button class="btn btn-outline-primary btn-sm rounded-pill border-dashed" onclick="openMyTaskModal()"><i class="bi bi-plus-lg me-1"></i><ruby>課題<rt>かだい</rt></ruby>作成</button></div>`;
+  let taskPoolHtml = `<div class="d-grid gap-2 mb-3 sticky-top bg-white pt-2 pb-2 border-bottom" style="top:0; z-index:5;"><button class="btn btn-outline-primary btn-sm rounded-pill border-dashed" onclick="openMyTaskModal()"><i class="bi bi-plus-lg me-1"></i><ruby>課題<rt>かだい</rt></ruby><ruby>作成<rt>さくせい</rt></ruby></button></div>`;
   
   allTasks.filter(t => t.format !== 'teacher').forEach(t => { 
     const borderClass = getCategoryColorClass(t.category);
@@ -887,7 +851,7 @@ function renderStudentPlanning() {
         <div class="small fw-bold">${escapeHtml(t.title)}</div>
         <div class="d-flex justify-content-between align-items-center mt-1">
           <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${escapeHtml(t.category)}</span>
-          <span class="x-small text-muted">${escapeHtml(t.time)}分</span>
+          <span class="x-small text-muted">${escapeHtml(t.time)}<ruby>分<rt>ふん</rt></ruby></span>
         </div>
       </div>`;
   });
@@ -921,8 +885,8 @@ function renderStudentPlanning() {
       hourTotalTime += (Number(t.time) || 0);
       const borderClass = getCategoryColorClass(t.category);
       const isTeacher = t.format === 'teacher';
-      const badge = isTeacher ? `<span class="badge bg-info text-white me-1" style="font-size:0.6em">固定</span>` : '';
-      const deleteBtn = isTeacher ? '' : `<i class="bi bi-x text-danger" role="button" tabindex="0" aria-label="計画から外す" style="cursor:pointer" onclick="event.stopPropagation(); removeFromPlan('${escJs(String(i))}', '${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); event.stopPropagation(); removeFromPlan('${escJs(String(i))}', '${escJs(t.taskId)}');}"></i>`;
+      const badge = isTeacher ? `<span class="badge bg-info text-white me-1" style="font-size:0.6em"><ruby>固定<rt>こてい</rt></ruby></span>` : '';
+      const deleteBtn = isTeacher ? '' : `<i class="bi bi-x text-danger" role="button" tabindex="0" aria-label="けいかくから はずす" style="cursor:pointer" onclick="event.stopPropagation(); removeFromPlan('${escJs(String(i))}', '${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); event.stopPropagation(); removeFromPlan('${escJs(String(i))}', '${escJs(t.taskId)}');}"></i>`;
       const bgStyle = t.category === 'マイタスク' ? 'background-color:#fbf5ff;' : (isTeacher ? 'opacity:0.9;' : '');
       
       plannedTasksHtml += `
@@ -933,7 +897,7 @@ function renderStudentPlanning() {
           </div>
           <div class="d-flex justify-content-between align-items-center mt-1">
             <span class="badge bg-light text-secondary border rounded-pill" style="font-size:0.6rem">${escapeHtml(t.category)}</span>
-            <span class="x-small text-muted">${escapeHtml(t.time)}分</span>
+            <span class="x-small text-muted">${escapeHtml(t.time)}<ruby>分<rt>ふん</rt></ruby></span>
           </div>
         </div>`;
     });
@@ -946,7 +910,7 @@ function renderStudentPlanning() {
     hoursHtml += `
       <div class="plan-hour-row mb-3">
         <div class="plan-hour-header-v p-2 fw-bold text-center border rounded-top position-relative" style="${headerStyle}">
-          第${i}時 <span class="small ms-2 fw-normal badge bg-white text-dark border">${hourTotalTime}分</span>
+          <ruby>第<rt>だい</rt></ruby>${i}<ruby>時<rt>じ</rt></ruby> <span class="small ms-2 fw-normal badge bg-white text-dark border">${hourTotalTime}<ruby>分<rt>ふん</rt></ruby></span>
         </div>
         <div class="plan-drop-zone-v p-2 border border-top-0 rounded-bottom" data-hour="${i}" style="min-height: 80px; background-color: #fff;">
           ${plannedTasksHtml}
@@ -959,13 +923,13 @@ function renderStudentPlanning() {
     <div class="p-3 d-flex flex-column h-100">
       <div class="cq-hero mb-3 flex-shrink-0" style="background:linear-gradient(135deg,#4f8ef7 0%,#3a78d8 100%)">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-          <div class="cq-hello"><span class="cq-hello-emoji"><i class="bi bi-calendar-range" aria-hidden="true"></i></span>けいかくを 立てよう</div>
+          <div class="cq-hello"><span class="cq-hello-emoji"><i class="bi bi-calendar-range" aria-hidden="true"></i></span>けいかくを たてよう</div>
           <button type="button" class="cq-btn cq-btn-green" onclick="setStudentViewMode('daily')"><i class="bi bi-check-lg" aria-hidden="true"></i>できた</button>
         </div>
         <div class="cq-hero-row">
-          <span class="cq-hero-badge"><i class="bi bi-clock-fill" aria-hidden="true"></i>ぜんぶで ${effectiveHours}時間</span>
-          <button type="button" class="cq-hero-badge" style="border:0;cursor:pointer" onclick="changeStudentTotalHours(1)" aria-label="時間をふやす"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
-          <button type="button" class="cq-hero-badge" style="border:0;cursor:pointer" onclick="changeStudentTotalHours(-1)" aria-label="時間をへらす"><i class="bi bi-dash-lg" aria-hidden="true"></i></button>
+          <span class="cq-hero-badge"><i class="bi bi-clock-fill" aria-hidden="true"></i>ぜんぶで ${effectiveHours}<ruby>時間<rt>じかん</rt></ruby></span>
+          <button type="button" class="cq-hero-badge" style="border:0;cursor:pointer" onclick="changeStudentTotalHours(1)" aria-label="じかんを ふやす"><i class="bi bi-plus-lg" aria-hidden="true"></i></button>
+          <button type="button" class="cq-hero-badge" style="border:0;cursor:pointer" onclick="changeStudentTotalHours(-1)" aria-label="じかんを へらす"><i class="bi bi-dash-lg" aria-hidden="true"></i></button>
           <span id="plan-save-state" class="cq-hero-badge" role="status">${renderPlanSaveStateLabel()}</span>
         </div>
       </div>
@@ -974,7 +938,7 @@ function renderStudentPlanning() {
       <div class="row flex-grow-1 plan-columns" style="min-height:0;">
         <!-- 左側：課題プール -->
         <div class="col-4 h-100 border-end bg-white rounded-start d-flex flex-column">
-          <div class="small text-muted mb-2 flex-shrink-0 p-2 border-bottom">課題リスト</div>
+          <div class="small text-muted mb-2 flex-shrink-0 p-2 border-bottom"><ruby>課題<rt>かだい</rt></ruby>リスト</div>
           <div id="task-pool-container" class="flex-grow-1 overflow-auto p-2"><div id="task-pool">${taskPoolHtml}</div></div>
         </div>
         <!-- 右側：計画表 -->
@@ -1228,9 +1192,9 @@ function openTaskDetailModal(taskId) {
   // 教材リンクのHTML生成（JSONパース処理はヘルパー関数を使用）
   const parseMat = (str) => { try { return JSON.parse(str||'{}'); } catch(e){ return {name:str,url:''}; } };
   const materials = [
-    { type: 'textbook', label: '教科書・資料', icon: 'bi-book', data: parseMat(t.textbook) },
+    { type: 'textbook', label: '<ruby>教科書<rt>きょうかしょ</rt></ruby>・<ruby>資料<rt>しりょう</rt></ruby>', icon: 'bi-book', data: parseMat(t.textbook) },
     { type: 'tablet', label: 'タブレット・アプリ', icon: 'bi-tablet', data: parseMat(t.tablet) },
-    { type: 'print', label: 'プリント・その他', icon: 'bi-file-earmark-text', data: parseMat(t.print) }
+    { type: 'print', label: 'プリント・その<ruby>他<rt>ほか</rt></ruby>', icon: 'bi-file-earmark-text', data: parseMat(t.print) }
   ];
 
   let materialHtml = '';
@@ -1250,9 +1214,9 @@ function openTaskDetailModal(taskId) {
     passportLauncherHtml = `
       <div class="mt-4 pt-3 border-top text-center">
         <button class="btn btn-outline-primary rounded-pill w-100 fw-bold shadow-sm" onclick="launchPassport('${escJs(taskId)}')">
-          <i class="bi bi-rocket-takeoff-fill me-2"></i>みらいパスポートで学習する
+          <i class="bi bi-rocket-takeoff-fill me-2"></i>みらいパスポートで <ruby>学習<rt>がくしゅう</rt></ruby>する
         </button>
-        <div class="x-small text-muted mt-1">※別タブでワークシートが開きます</div>
+        <div class="x-small text-muted mt-1">※べつの タブで ワークシートが ひらくよ</div>
       </div>`;
   }
 
@@ -1261,14 +1225,15 @@ function openTaskDetailModal(taskId) {
     html: `
       <div class="text-start">
         <p class="small bg-light p-2 rounded mb-3">${escapeHtml(t.desc)}</p>
-        ${materialHtml ? '<div class="mb-3 border p-2 rounded bg-white"><div class="small fw-bold text-primary mb-2"><i class="bi bi-link-45deg"></i> 学習リンク</div>' + materialHtml + '</div>' : ''}
-        <label class="form-label fw-bold small">メモ（気づき・わかったこと）</label>
-        <textarea id="ref-txt" class="form-control" rows="3" placeholder="ここに記録を残せます">${escapeHtml(mem)}</textarea>
+        ${materialHtml ? '<div class="mb-3 border p-2 rounded bg-white"><div class="small fw-bold text-primary mb-2"><i class="bi bi-link-45deg"></i> <ruby>学習<rt>がくしゅう</rt></ruby>リンク</div>' + materialHtml + '</div>' : ''}
+        <label class="form-label fw-bold small">メモ（<ruby>気<rt>き</rt></ruby>づき・わかったこと）</label>
+        <textarea id="ref-txt" class="form-control" rows="3" placeholder="ここに きろくを のこせるよ">${escapeHtml(mem)}</textarea>
         ${passportLauncherHtml}
       </div>
     `,
     showCancelButton: true,
-    confirmButtonText: '保存',
+    confirmButtonText: 'ほぞんする',
+    cancelButtonText: 'やめる',
     confirmButtonColor: '#1a73e8'
   }).then(r => {
     if (r.isConfirmed) {
@@ -1278,7 +1243,7 @@ function openTaskDetailModal(taskId) {
         dataStore.studentProgress[taskId].reflection = txt;
         const curStatus = dataStore.studentProgress[taskId].status || '未着手';
         runSave('メモ').updateStatus(appState.user.name, t.taskId, t.title, curStatus, '通常', txt, appState.user.classId, appState.unit.id);
-        showToast('success', 'メモを保存しました');
+        showToast('success', 'メモを ほぞんしたよ');
       }
     }
   });
@@ -1295,28 +1260,29 @@ function openDailyReflectionModal(targetHour = null) {
     ref = dataStore.studentReflections[hourToEdit];
   }
 
-  // スキル選択ボタンの生成
+  // スキル選択ボタンの生成（児童画面なのでラベルにルビ、グループはかな表示）
+  const groupKana = { '自分': 'じぶん', '人': 'ひと', '課題': 'かだい', '生活': 'せいかつ' };
   const skillButtons = SKILL_DEFINITIONS.map(s => {
     const isChecked = ref.skills && ref.skills.includes(s.id);
     return `
       <div class="col-3 col-md-3 mb-2">
         <input type="checkbox" class="btn-check skill-check" id="skill-${s.id}" value="${s.id}" ${isChecked ? 'checked' : ''}>
         <label class="btn btn-outline-${s.color} w-100 rounded-pill btn-sm py-2" for="skill-${s.id}">
-          <div class="small fw-light" style="font-size:0.7rem">${s.group}</div>
-          <div class="fw-bold">${s.label}</div>
+          <div class="small fw-light" style="font-size:0.7rem">${groupKana[s.group] || s.group}</div>
+          <div class="fw-bold"><ruby>${s.label}<rt>${s.kana}</rt></ruby></div>
         </label>
       </div>`;
   }).join('');
 
   Swal.fire({
-    title: `<div class="fs-4 fw-bold">第${hourToEdit}時のふりかえり</div>`,
+    title: `<div class="fs-4 fw-bold"><ruby>第<rt>だい</rt></ruby>${hourToEdit}<ruby>時<rt>じ</rt></ruby>の ふりかえり</div>`,
     html: `
       <div class="text-start">
         <div class="mb-4">
           <label class="form-label small fw-bold text-muted"><ruby>達成度<rt>たっせいど</rt></ruby></label>
           <div class="btn-group w-100" role="group">
             <input type="radio" class="btn-check" name="ach-btn" id="ach-a" value="A" ${ref.achievement==='A'?'checked':''}>
-            <label class="btn btn-outline-primary" for="ach-a">◎ <ruby>計画<rt>けいかく</rt></ruby>通り</label>
+            <label class="btn btn-outline-primary" for="ach-a">◎ <ruby>計画<rt>けいかく</rt></ruby><ruby>通<rt>どお</rt></ruby>り</label>
             <input type="radio" class="btn-check" name="ach-btn" id="ach-b" value="B" ${ref.achievement==='B'?'checked':''}>
             <label class="btn btn-outline-primary" for="ach-b">〇 まあまあ</label>
             <input type="radio" class="btn-check" name="ach-btn" id="ach-c" value="C" ${ref.achievement==='C'?'checked':''}>
@@ -1325,7 +1291,7 @@ function openDailyReflectionModal(targetHour = null) {
         </div>
 
         <div class="mb-4">
-          <label class="form-label small fw-bold text-muted">今日<ruby>発揮<rt>はっき</rt></ruby>した<ruby>力<rt>ちから</rt></ruby>（複数選択可）</label>
+          <label class="form-label small fw-bold text-muted"><ruby>今日<rt>きょう</rt></ruby><ruby>発揮<rt>はっき</rt></ruby>した<ruby>力<rt>ちから</rt></ruby>（いくつでも えらべるよ）</label>
           <div class="row gx-2">
             ${skillButtons}
           </div>
@@ -1333,18 +1299,19 @@ function openDailyReflectionModal(targetHour = null) {
 
         <div>
           <label class="form-label small fw-bold text-muted">ひとことコメント</label>
-          <textarea id="rf-com" class="form-control bg-light border-0" rows="3" placeholder="わかったこと、次がんばりたいこと">${escapeHtml(ref.comment)}</textarea>
+          <textarea id="rf-com" class="form-control bg-light border-0" rows="3" placeholder="わかったこと、つぎに がんばりたいこと">${escapeHtml(ref.comment)}</textarea>
         </div>
       </div>
     `,
     width: '600px',
     showCancelButton: true,
-    confirmButtonText: '記録する',
+    confirmButtonText: 'きろくする',
+    cancelButtonText: 'やめる',
     confirmButtonColor: '#1a73e8',
     customClass: { popup: 'rounded-5' },
     preConfirm: () => {
       const achEl = document.querySelector('input[name="ach-btn"]:checked');
-      if (!achEl) { Swal.showValidationMessage('達成度を選択してください'); return false; }
+      if (!achEl) { Swal.showValidationMessage('◎〇△の どれかを えらんでね'); return false; }
       
       const skills = Array.from(document.querySelectorAll('.skill-check:checked')).map(el => el.value);
       return {
@@ -1360,7 +1327,7 @@ function openDailyReflectionModal(targetHour = null) {
       dataStore.studentReflections[hourToEdit] = v;
 
       runSave('ふりかえり').saveDailyReflection(appState.user.name, appState.unit.id, hourToEdit, v.achievement, v.comment, appState.user.classId, v.skills);
-      showToast('success', 'ふりかえりを記録しました');
+      showToast('success', 'ふりかえりを きろくしたよ');
       renderStudentView(); // 更新
     }
   });
@@ -1389,7 +1356,7 @@ function renderPortfolioModal(key, isTeacher = false, displayName = '') {
   const stamp = pfData.stamp || "";
 
   // スキル集計（グラフ用データ）とあゆみタイムラインは共通ヘルパーで作る
-  const skillData = computePortfolioSkillData(reflections);
+  const skillData = computePortfolioSkillData(reflections, !isTeacher);
   const chartLabels = skillData.chartLabels;
   const chartData = skillData.chartData;
   const maxVal = skillData.maxVal;
@@ -1405,7 +1372,7 @@ function renderPortfolioModal(key, isTeacher = false, displayName = '') {
     const stampIcon = {'check':'✅','good':'👍','great':'💮','support':'🚩'}[stamp] || '';
     feedbackHtml = `
       <div class="mt-4 border p-3 rounded bg-white shadow-sm">
-        <div class="small fw-bold text-primary mb-2"><i class="bi bi-person-badge-fill me-1"></i>先生からのメッセージ</div>
+        <div class="small fw-bold text-primary mb-2"><i class="bi bi-person-badge-fill me-1"></i><ruby>先生<rt>せんせい</rt></ruby>からの メッセージ</div>
         <div class="d-flex align-items-start">
           <div class="display-4 me-3">${stampIcon}</div>
           <div class="flex-grow-1 bg-light p-2 rounded small text-dark">${escapeHtml(feedback) || '（コメントなし）'}</div>
@@ -1421,7 +1388,7 @@ function renderPortfolioModal(key, isTeacher = false, displayName = '') {
          ${feedbackHtml}
        </div>`
     : `<div class="p-2">
-         <div class="small text-muted mb-2">この単元を通して学んだこと、できるようになったことを書きましょう。</div>
+         <div class="small text-muted mb-2">この<ruby>単元<rt>たんげん</rt></ruby>で <ruby>学<rt>まな</rt></ruby>んだこと、できるようになったことを <ruby>書<rt>か</rt></ruby>きましょう。</div>
          <textarea id="pf-summary" class="form-control bg-light border-0" rows="8" placeholder="ここにまとめを書こう...">${escapeHtml(summary)}</textarea>
          <button class="btn btn-primary rounded-pill w-100 mt-3" onclick="saveSummary()"><ruby>保存<rt>ほぞん</rt></ruby>する</button>
          ${feedbackHtml}
@@ -1467,7 +1434,7 @@ function renderPortfolioModal(key, isTeacher = false, displayName = '') {
  * [計算] ふりかえりから「発揮した力」の集計を作る（レーダーチャート用）。
  * @returns {{chartLabels:string[], chartData:number[], maxVal:number}}
  */
-function computePortfolioSkillData(reflections) {
+function computePortfolioSkillData(reflections, useKana = false) {
   const skillCounts = {};
   SKILL_DEFINITIONS.forEach(s => skillCounts[s.id] = 0);
   Object.values(reflections || {}).forEach(r => {
@@ -1477,7 +1444,9 @@ function computePortfolioSkillData(reflections) {
       });
     }
   });
-  const chartLabels = SKILL_DEFINITIONS.map(s => s.label);
+  // Chart.js のレーダーは canvas 描画のためルビが振れない。
+  // 児童画面（useKana=true）ではラベルをかなにする。先生画面は漢字のまま。
+  const chartLabels = SKILL_DEFINITIONS.map(s => (useKana ? s.kana : s.label));
   const chartData = SKILL_DEFINITIONS.map(s => skillCounts[s.id]);
   const maxVal = Math.max(5, ...chartData) + 1;
   return { chartLabels, chartData, maxVal };
@@ -1493,7 +1462,7 @@ function buildPortfolioTimelineHtml(reflections, opts) {
   let html = '<div class="timeline-wrapper ps-2 border-start border-3 ms-3">';
   const sortedHours = Object.keys(reflections || {}).map(Number).sort((a, b) => a - b);
   if (sortedHours.length === 0) {
-    html += '<div class="text-muted ms-3 small">まだふりかえりの記録がありません</div>';
+    html += '<div class="text-muted ms-3 small">まだ ふりかえりの きろくが ないよ</div>';
   } else {
     sortedHours.forEach(h => {
       const r = reflections[h];
@@ -1508,13 +1477,13 @@ function buildPortfolioTimelineHtml(reflections, opts) {
       }
       // h は Object.keys().map(Number) 由来の数値なので onclick へ直接埋め込んでよい
       const editIcon = editHandler
-        ? `<i class="bi bi-pencil-square text-muted ms-2 cursor-pointer edit-icon" role="button" tabindex="0" aria-label="このふりかえりを直す" onclick="${editHandler(h)}"></i>`
+        ? `<i class="bi bi-pencil-square text-muted ms-2 cursor-pointer edit-icon" role="button" tabindex="0" aria-label="このふりかえりを なおす" onclick="${editHandler(h)}"></i>`
         : '';
       html += `
         <div class="position-relative mb-4 ms-3">
           <div class="position-absolute top-0 start-0 translate-middle rounded-circle bg-white border border-2" style="width:12px;height:12px;left:-22px!important;"></div>
           <div class="small fw-bold text-muted mb-1 d-flex align-items-center">
-            第${h}時 <span class="${achColor} ms-2 fs-6">${achIcon}</span>
+            <ruby>第<rt>だい</rt></ruby>${h}<ruby>時<rt>じ</rt></ruby> <span class="${achColor} ms-2 fs-6">${achIcon}</span>
             ${editIcon}
           </div>
           <div class="bg-light p-2 rounded small">${escapeHtml(r.comment) || 'コメントなし'}</div>
@@ -1545,7 +1514,7 @@ function drawSkillRadar(canvasId, chartLabels, chartData, maxVal) {
     data: {
       labels: chartLabels,
       datasets: [{
-        label: '発揮した力',
+        label: 'はっきした ちから',
         data: chartData,
         backgroundColor: 'rgba(26, 115, 232, 0.2)',
         borderColor: 'rgba(26, 115, 232, 1)',
@@ -1576,7 +1545,7 @@ function saveSummary() {
   if(!dataStore.portfolioData) dataStore.portfolioData = {};
   dataStore.portfolioData.summary = val;
   runSave('まとめ').savePortfolio(appState.user.name, appState.unit.id, val, appState.user.classId);
-  showToast('success', '保存しました');
+  showToast('success', 'ほぞんしたよ');
 }
 
 // ==========================================
@@ -1598,7 +1567,7 @@ function renderStudentPortfolio() {
   const feedback = pfData.feedback || "";
   const stamp = pfData.stamp || "";
 
-  const skillData = computePortfolioSkillData(reflections);
+  const skillData = computePortfolioSkillData(reflections, true);
   const timelineHtml = buildPortfolioTimelineHtml(reflections, {
     editHandler: (h) => `openDailyReflectionModal(${h})`
   });
@@ -1609,7 +1578,7 @@ function renderStudentPortfolio() {
     const stampIcon = {'check':'✅','good':'👍','great':'💮','support':'🚩'}[stamp] || '';
     feedbackHtml = `
       <div class="mt-3 border p-3 rounded bg-white shadow-sm">
-        <div class="small fw-bold text-primary mb-2"><i class="bi bi-person-badge-fill me-1"></i>先生からのメッセージ</div>
+        <div class="small fw-bold text-primary mb-2"><i class="bi bi-person-badge-fill me-1"></i><ruby>先生<rt>せんせい</rt></ruby>からの メッセージ</div>
         <div class="d-flex align-items-start">
           <div class="display-4 me-3">${stampIcon}</div>
           <div class="flex-grow-1 bg-light p-2 rounded small text-dark">${escapeHtml(feedback) || '（コメントなし）'}</div>
@@ -1638,7 +1607,7 @@ function renderStudentPortfolio() {
       <div class="card shadow-sm border-0 rounded-4 mb-3">
         <div class="card-body">
           <div class="small fw-bold text-muted mb-2"><i class="bi bi-pencil-square me-1"></i>この<ruby>単元<rt>たんげん</rt></ruby>のまとめ</div>
-          <div class="small text-muted mb-2">学んだこと、できるようになったことを書きましょう。</div>
+          <div class="small text-muted mb-2"><ruby>学<rt>まな</rt></ruby>んだこと、できるようになったことを <ruby>書<rt>か</rt></ruby>きましょう。</div>
           <textarea id="pf-summary" class="form-control bg-light border-0" rows="6" placeholder="ここにまとめを書こう...">${escapeHtml(summary)}</textarea>
           <button type="button" class="cq-btn cq-btn-purple cq-btn-block mt-3" onclick="saveSummary()"><i class="bi bi-save" aria-hidden="true"></i>ほぞんする</button>
           ${feedbackHtml}
@@ -1681,13 +1650,13 @@ function loadPortfolioWorksheets() {
       if (!target) return;
       const list = Array.isArray(subs) ? subs : [];
       if (list.length === 0) {
-        target.innerHTML = '<div class="text-muted small text-center py-3">まだ提出したワークシートはありません</div>';
+        target.innerHTML = '<div class="text-muted small text-center py-3">まだ ていしゅつした ワークシートは ないよ</div>';
         return;
       }
       target.innerHTML = '<div class="row g-2">' + list.map(function (s) {
-        const title = escapeHtml(s.stepTitle || '無題');
+        const title = escapeHtml(s.stepTitle || 'むだい');
         const unit = escapeHtml(s.unitName || '');
-        const statusMap = { submitted: '提出ずみ', graded: '先生がみた', draft: '下書き' };
+        const statusMap = { submitted: 'ていしゅつずみ', graded: 'せんせいが みたよ', draft: 'かきかけ' };
         const statusLabel = escapeHtml(statusMap[s.status] || s.status || '');
         const statusClass = s.status === 'graded' ? 'bg-success' : (s.status === 'submitted' ? 'bg-primary' : 'bg-secondary');
         const hasFeedback = (s.feedbackText && String(s.feedbackText).trim() !== '') || s.status === 'graded';
@@ -1718,7 +1687,7 @@ function loadPortfolioWorksheets() {
     })
     .withFailureHandler(function (err) {
       const target = document.getElementById('portfolio-worksheets');
-      if (target) target.innerHTML = '<div class="text-danger small text-center py-3">読み込みに失敗しました</div>';
+      if (target) target.innerHTML = '<div class="text-danger small text-center py-3">よみこみに しっぱいしたよ</div>';
       if (typeof console !== 'undefined') console.error(err);
     })
     .getMyWorksheetSubmissions();
@@ -1849,7 +1818,7 @@ function loadPlazaResponses(taskId, label) {
     })
     .withFailureHandler(function (err) {
       const target = document.getElementById('plaza-grid');
-      if (target) target.innerHTML = '<div class="text-danger small text-center py-3">読み込みに失敗しました</div>';
+      if (target) target.innerHTML = '<div class="text-danger small text-center py-3">よみこみに しっぱいしたよ</div>';
       if (typeof console !== 'undefined') console.error(err);
     })
     .getSharedResponses(taskId);
@@ -1869,13 +1838,14 @@ function openPlazaPeer(idx) {
  */
 function openMyTaskModal() { 
   Swal.fire({ 
-    title: 'じぶんの課題', 
-    html: `<div class="text-start"><label class="form-label small fw-bold">タイトル</label><input id="mt-title" class="form-control mb-3"><label class="form-label small fw-bold">めあて</label><textarea id="mt-desc" class="form-control mb-3" rows="2"></textarea><label class="form-label small fw-bold">時間</label><input id="mt-time" type="number" class="form-control" value="15"></div>`, 
-    showCancelButton: true, 
-    confirmButtonText: '追加', 
+    title: 'じぶんの<ruby>課題<rt>かだい</rt></ruby>', 
+    html: `<div class="text-start"><label class="form-label small fw-bold">タイトル</label><input id="mt-title" class="form-control mb-3"><label class="form-label small fw-bold">めあて</label><textarea id="mt-desc" class="form-control mb-3" rows="2"></textarea><label class="form-label small fw-bold"><ruby>時間<rt>じかん</rt></ruby>（<ruby>分<rt>ふん</rt></ruby>）</label><input id="mt-time" type="number" class="form-control" value="15"></div>`, 
+    showCancelButton: true,
+    confirmButtonText: 'つくる',
+    cancelButtonText: 'やめる', 
     preConfirm: () => {
       const t = document.getElementById('mt-title').value.trim();
-      if (!t) { Swal.showValidationMessage('タイトル必須'); return false; }
+      if (!t) { Swal.showValidationMessage('タイトルを 入れてね'); return false; }
       return { title: t, desc: document.getElementById('mt-desc').value, time: parseInt(document.getElementById('mt-time').value, 10) || 15 };
     }
   }).then(r => { 
@@ -1907,7 +1877,7 @@ function openMyTaskModal() {
           // すでに手元のデータへ反映済みなので、サーバーからの全再取得はせず画面だけ描き直す
           renderStudentView();
         }
-        showToast('success', '課題を追加し、計画に登録しました');
+        showToast('success', 'かだいを つくって、けいかくに 入れたよ');
       }).withFailureHandler(err => { console.error(err); reportSaveFailure('じぶんの課題'); })
         .addMyTask(appState.user.name, v.title, v.desc, v.time, appState.unit.id, appState.user.classId);
     } 
@@ -1935,7 +1905,7 @@ function renderMyTimer() {
         </div>
         <div class="input-group input-group-sm mb-2" id="timer-input-group" style="display:none;">
           <input type="number" id="timer-input-min" class="form-control" placeholder="分" min="1" max="60">
-          <button class="btn btn-primary" onclick="setTimerTime()">設定</button>
+          <button class="btn btn-primary" onclick="setTimerTime()">セット</button>
         </div>
         <div class="d-flex justify-content-between">
           <button class="btn btn-primary btn-sm rounded-pill px-3" onclick="toggleTimer()" id="timer-btn-toggle"><ruby>開始<rt>かいし</rt></ruby></button>
@@ -1989,7 +1959,7 @@ function toggleTimer() {
           myTimer.seconds = 0;
           document.getElementById('timer-btn-toggle').innerHTML = '<ruby>開始<rt>かいし</rt></ruby>';
           document.getElementById('timer-btn-toggle').className = 'btn btn-primary btn-sm rounded-pill px-3';
-          showToast('info', '時間です！');
+          showToast('info', 'じかんだよ！');
         }
       }
       updateTimerDisplay();
