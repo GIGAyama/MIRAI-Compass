@@ -212,30 +212,137 @@ function renderTeacherManager(teachers) {
 /**
  * [画面描画] 先生用メイン画面の枠組み
  */
+// 先生画面のビュー定義。「授業の流れ」の3フェーズにグループ分けして、
+// 初めての先生でも「今なにをする画面か」「次にどこを見るか」が分かるようにする。
+const TEACHER_VIEWS = {
+  design:    { group: 'prep',  label: '単元設計', icon: 'bi-pencil-ruler',  title: '単元設計',
+               hint: '単元と課題を用意します。テンプレートを選ぶだけでも始められます。' },
+  control:   { group: 'prep',  label: '授業配信', icon: 'bi-broadcast',     title: '授業の配信',
+               hint: '「いまこの授業をやっています」を児童の画面に知らせます。' },
+  cards:     { group: 'live',  label: 'LIVE',     icon: 'bi-activity',      title: 'LIVEモニター', auto: true,
+               hint: '子どもの「いまの課題」とSOSがリアルタイムで並びます。' },
+  seating:   { group: 'live',  label: '座席',     icon: 'bi-grid-3x3-gap',  title: '座席表', auto: true,
+               hint: '教室の座席の並びで見守れます（カードはドラッグで配置）。' },
+  heatmap:   { group: 'live',  label: '進捗一覧', icon: 'bi-table',         title: '進捗一覧', auto: true,
+               hint: 'クラス全員×課題の進み具合を一目で確認。セルを押すとスタンプを送れます。' },
+  dashboard: { group: 'after', label: '添削',     icon: 'bi-check2-square', title: 'ワークシート添削',
+               hint: '提出されたワークシートを確認して、赤ペンとコメントで返却します。' },
+  summaries: { group: 'after', label: 'まとめ',   icon: 'bi-journal-check', title: 'ふりかえり・まとめ',
+               hint: '単元のまとめにスタンプとコメントを返します。' }
+};
+const TEACHER_NAV_GROUPS = [
+  { id: 'prep',  caption: '① じゅんび',      views: ['design', 'control'] },
+  { id: 'live',  caption: '② 授業中',        views: ['cards', 'seating', 'heatmap'] },
+  { id: 'after', caption: '③ みとり・かえす', views: ['dashboard', 'summaries'] }
+];
+
+/**
+ * [判定] はじめかたガイド用：準備がどこまでできているか。
+ * schedules はサーバーが「今日以降」だけを返すため、hasSchedule は「今日の配信があるか」。
+ */
+function getTeacherSetupStatus() {
+  return {
+    hasUnit: appState.unitList.length > 0,
+    hasRoster: (dataStore.roster || []).some(r => r && r.isActive !== false && r.name),
+    hasSchedule: (appState.schedules || []).length > 0
+  };
+}
+
+/**
+ * [HTML生成] はじめかたガイド。
+ * 単元がまだ無い（＝初回）ときは3ステップのカードを大きく出し、
+ * 単元はあるが名簿・配信が未了のときは残りだけを控えめなバーで出す。
+ * すべて済んでいれば何も出さない。
+ */
+function renderTeacherSetupGuideHtml() {
+  const st = getTeacherSetupStatus();
+  if (st.hasUnit && st.hasRoster && st.hasSchedule) return '';
+
+  const stepRow = (done, num, title, desc, btnLabel, onclick) => `
+    <div class="d-flex align-items-center gap-3 p-2 rounded-3 ${done ? 'opacity-50' : 'bg-white shadow-sm'}">
+      <span class="setup-step-num ${done ? 'done' : ''}">${done ? '<i class="bi bi-check-lg" aria-hidden="true"></i>' : num}</span>
+      <div class="flex-grow-1">
+        <div class="fw-bold small">${title}</div>
+        <div class="x-small text-muted">${desc}</div>
+      </div>
+      ${done ? '' : `<button class="btn btn-primary btn-sm rounded-pill px-3 flex-shrink-0" onclick="${onclick}">${btnLabel}</button>`}
+    </div>`;
+
+  if (!st.hasUnit) {
+    return `
+      <div class="card border-0 rounded-4 p-3 mb-3 flex-shrink-0 setup-guide-card">
+        <div class="fw-bold text-primary mb-1"><i class="bi bi-stars me-2" aria-hidden="true"></i>3ステップではじめる自由進度学習</div>
+        <div class="x-small text-muted mb-2">はじめてでも大丈夫。上から順に進めるだけで、今日から授業で使えます。</div>
+        <div class="d-grid gap-2">
+          ${stepRow(st.hasUnit, 1, '単元をつくる', 'テンプレートを選ぶだけでOK。あとから自由に手直しできます。', 'テンプレートを見る', 'openUnitManagerModal()')}
+          ${stepRow(st.hasRoster, 2, '名簿をとうろく', 'ExcelやCSVから貼り付けるだけ。児童のログインに使います。', '名簿をひらく', 'openRosterManagerModal()')}
+          ${stepRow(st.hasSchedule, 3, 'きょうの授業を配信', '児童の画面に「いまの授業」への案内が表示されます。', '配信画面へ', "setTeacherView('control')")}
+        </div>
+      </div>`;
+  }
+
+  // 単元はある：残りのステップだけを1行で（このセッション中は ✕ で消せる）
+  let dismissed = false;
+  try { dismissed = sessionStorage.getItem('mirai_setup_bar_dismissed') === '1'; } catch (e) { /* プライベートモード等 */ }
+  if (dismissed) return '';
+
+  const chips = [];
+  if (!st.hasRoster) chips.push(`<button class="btn btn-sm btn-outline-primary rounded-pill" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿をとうろくする</button>`);
+  if (!st.hasSchedule) chips.push(`<button class="btn btn-sm btn-outline-primary rounded-pill" onclick="setTeacherView('control')"><i class="bi bi-broadcast me-1" aria-hidden="true"></i>きょうの授業を配信する</button>`);
+  return `
+    <div class="d-flex align-items-center gap-2 flex-wrap mb-3 flex-shrink-0 setup-guide-bar rounded-3 px-3 py-2">
+      <span class="small text-muted"><i class="bi bi-lightbulb me-1" aria-hidden="true"></i>つぎのじゅんび：</span>
+      ${chips.join('')}
+      <button type="button" class="btn-close ms-auto" style="font-size:.65rem" aria-label="このお知らせを閉じる" onclick="dismissSetupGuideBar()"></button>
+    </div>`;
+}
+
+/** [アクション] じゅんびリマインダーを閉じる（このセッションの間だけ） */
+function dismissSetupGuideBar() {
+  try { sessionStorage.setItem('mirai_setup_bar_dismissed', '1'); } catch (e) { /* 保存できなくても閉じる */ }
+  renderTeacherView();
+}
+
 function renderTeacherView() {
   const container = document.getElementById('app-container');
-  
+  const view = TEACHER_VIEWS[appState.view.teacher] || TEACHER_VIEWS.cards;
+
   // クラス切り替えタブの生成
   const classes = ['All', ...dataStore.classList];
-  const tabsHtml = classes.map(c => 
+  const tabsHtml = classes.map(c =>
     `<li class="nav-item"><a class="nav-link ${appState.view.teacherClassId === c ? 'active fw-bold' : ''}" href="#" onclick="setTeacherClass('${escJs(c)}')">${c === 'All' ? '全員' : escapeHtml(c)}</a></li>`
   ).join('');
 
+  // フェーズ別ナビ（① じゅんび / ② 授業中 / ③ みとり・かえす）
+  const navHtml = TEACHER_NAV_GROUPS.map(g => {
+    const btns = g.views.map(v => {
+      const def = TEACHER_VIEWS[v];
+      const active = appState.view.teacher === v;
+      return `<button type="button" class="tnav-btn ${active ? 'active' : ''}" ${active ? 'aria-current="page"' : ''} onclick="setTeacherView('${v}')">
+                <i class="bi ${def.icon} me-1" aria-hidden="true"></i>${def.label}
+              </button>`;
+    }).join('');
+    // 「じゅんび」グループには名簿（モーダル）も並べる
+    const rosterBtn = g.id === 'prep'
+      ? `<button type="button" class="tnav-btn" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿</button>`
+      : '';
+    return `<div class="tnav-group" role="group" aria-label="${escapeHtml(g.caption)}">
+              <span class="tnav-caption">${escapeHtml(g.caption)}</span>
+              <div class="tnav-btns">${btns}${rosterBtn}</div>
+            </div>`;
+  }).join('');
+
+  const autoBadge = view.auto ? `<span class="badge bg-success ms-2 small" style="font-size:0.6rem" title="この画面は自動で更新されます">AUTO</span>` : '';
+
   container.innerHTML = `
     <div class="card shadow-sm p-4 border-0 rounded-4 teacher-view-card h-100">
-      <!-- 上部ヘッダー：モード切替ボタン群 -->
-      <div class="d-flex justify-content-between align-items-center mb-3 flex-shrink-0">
-        <h5 class="fw-bold m-0 text-primary"><i class="bi bi-speedometer2 me-2"></i>モニター <span class="badge bg-success ms-2 small" style="font-size:0.6rem">AUTO</span></h5>
-        <div class="d-flex gap-3 align-items-center">
-          <div class="btn-group shadow-sm rounded-pill" role="group">
-            <button class="btn btn-sm ${appState.view.teacher === 'cards' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('cards')">LIVE</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'heatmap' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('heatmap')">一覧</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'seating' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('seating')">座席</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'summaries' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('summaries')">まとめ</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'dashboard' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('dashboard')"><i class="bi bi-check2-square me-1"></i>添削</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'design' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('design')"><i class="bi bi-pencil-ruler me-1"></i>設計</button>
-            <button class="btn btn-sm ${appState.view.teacher === 'control' ? 'btn-primary' : 'btn-outline-primary'}" onclick="setTeacherView('control')">進行</button>
-          </div>
+      <!-- 上部ヘッダー：現在のビュー名 + 主要アクション -->
+      <div class="d-flex justify-content-between align-items-start gap-3 mb-2 flex-shrink-0 flex-wrap">
+        <div>
+          <h5 class="fw-bold m-0 text-primary"><i class="bi ${view.icon} me-2" aria-hidden="true"></i>${view.title}${autoBadge}</h5>
+          <div class="x-small text-muted mt-1">${view.hint}</div>
+        </div>
+        <div class="d-flex gap-2 align-items-center flex-shrink-0">
           <!-- 印刷：まとめ一覧・ヒートマップを紙で配るときに使う。
                印刷用スタイル（css.html の @media print）が当たり、
                ナビ・フッター・ボタン・タイマーは出ない。 -->
@@ -243,15 +350,35 @@ function renderTeacherView() {
           <button class="btn btn-primary btn-sm rounded-pill px-3 shadow-sm" onclick="openUnitManagerModal()"><i class="bi bi-plus-circle me-1" aria-hidden="true"></i>新規単元登録</button>
         </div>
       </div>
-      
+
+      <!-- フェーズ別ナビ -->
+      <nav class="tnav mb-3 flex-shrink-0" aria-label="先生メニュー">${navHtml}</nav>
+
+      <!-- はじめかたガイド（準備が済んでいないときだけ出る） -->
+      ${renderTeacherSetupGuideHtml()}
+
       <!-- クラスフィルタータブ -->
-      <ul class="nav nav-tabs mb-4 border-bottom-0 flex-shrink-0">${tabsHtml}</ul>
-      
+      <ul class="nav nav-tabs mb-3 border-bottom-0 flex-shrink-0">${tabsHtml}</ul>
+
       <!-- メインコンテンツエリア -->
       <div id="t-area" class="position-relative flex-grow-1 d-flex flex-column overflow-hidden"></div>
     </div>`;
-    
+
   renderTeacherDashboardContent(); // 中身を描画
+}
+
+/**
+ * [HTML生成] 先生ビュー共通の空状態。
+ * 「データが無い」で終わらせず、次にやることへのボタンを必ず添える。
+ */
+function teacherEmptyState(icon, title, desc, actionsHtml) {
+  return `
+    <div class="d-flex flex-column align-items-center justify-content-center text-center p-5 flex-grow-1">
+      <i class="bi ${icon} text-secondary opacity-50 mb-3" style="font-size:2.6rem" aria-hidden="true"></i>
+      <div class="fw-bold mb-1">${title}</div>
+      <div class="small text-muted mb-3" style="max-width:420px">${desc}</div>
+      <div class="d-flex gap-2 flex-wrap justify-content-center">${actionsHtml || ''}</div>
+    </div>`;
 }
 
 // ビュー切り替えヘルパー
@@ -307,13 +434,44 @@ function renderTeacherDashboardContent() {
 }
 
 /**
+ * [サーバー通信] クラス進捗の定期取得（js_core のポーリングから30秒ごとに呼ばれる）。
+ * 進捗一覧を開いているときは、その場で表を静かに描き直す。
+ * まとめビューは入力欄があるため描き直さない（データの更新だけ行う）。
+ */
+function fetchTeacherProgressSnapshot() {
+  google.script.run
+    .withSuccessHandler(res => {
+      if (!res || !res.success || !res.json) return;
+      let d;
+      try { d = JSON.parse(res.json); } catch (e) { return; }
+      if (d.progress) dataStore.clsProgress = d.progress;
+      if (d.feedback) dataStore.clsFeedback = d.feedback;
+      if (appState.mode === 'teacher' && appState.view.teacher === 'heatmap') {
+        const el = document.getElementById('t-area');
+        if (!el) return;
+        // セルをキーボードで移動中（フォーカスが表の中にある）は描き直さない。
+        // 描き直すとフォーカスが飛んで操作が中断されてしまう。次の30秒後に更新される。
+        const active = document.activeElement;
+        if (active && active !== document.body && el.contains(active)) return;
+        const scrollPos = el.scrollTop;
+        renderHeatmap(el, getFilteredStudents());
+        el.scrollTop = scrollPos;
+      }
+    })
+    .withFailureHandler(e => console.error('Progress snapshot error', e))
+    .getProgressSnapshot();
+}
+
+/**
  * [データ処理] 表示対象の生徒データを抽出
  */
 function getFilteredStudents() {
   const classId = appState.view.teacherClassId;
   const live = Array.isArray(dataStore.liveStatus) ? dataStore.liveStatus : [];
-  // dataStore.liveStatus への参照をそのまま返さない（呼び出し側の sort 等で元データを壊さないため）
-  const base = (classId === 'All') ? live.slice() : live.filter(s => s.classId === classId);
+  // dataStore.liveStatus への参照をそのまま返さない（呼び出し側の sort 等で元データを壊さないため）。
+  // 各児童に正準キー（key）を付けて返す。集計データ（clsProgress 等）はこの key で引く。
+  const base = (classId === 'All' ? live.slice() : live.filter(s => s.classId === classId))
+    .map(s => Object.assign({}, s, { key: studentKeyOf(s.id, s.name) }));
 
   // 名簿（在籍中）にいるがまだ一度もログインしていない児童も一覧に出す。
   // liveStatus に無い在籍児童を、待機状態として補う。
@@ -324,7 +482,7 @@ function getFilteredStudents() {
     if (classId !== 'All' && r.classId !== classId) return;
     if (seen.has(r.name)) return;
     seen.add(r.name);
-    base.push({ name: r.name, classId: r.classId, number: r.number, mode: '通常', task: '-' });
+    base.push({ name: r.name, classId: r.classId, number: r.number, mode: '通常', task: '-', key: resolveStudentKey(r) });
   });
   return base;
 }
@@ -344,10 +502,9 @@ function updateLiveViews() {
   // LIVEビューの場合
   if (appState.view.teacher === 'cards') {
     students.forEach(s => {
-      // id は生成時に escapeHtml した文字列で作られるため、& や引用符を含む名前だと
-      // getElementById の生文字列と一致しなくなる。座席表と同じ data-name + CSS.escape 方式で引く。
-      const nameSel = (window.CSS && CSS.escape) ? CSS.escape(s.name) : String(s.name).replace(/["\\\]]/g, '\\$&');
-      const card = document.querySelector(`.live-card[data-name="${nameSel}"]`);
+      // 正準キー（data-key）で引く。同名児童がいてもそれぞれのカードが正しく更新される。
+      const keySel = (window.CSS && CSS.escape) ? CSS.escape(s.key) : String(s.key).replace(/["\\\]]/g, '\\$&');
+      const card = document.querySelector(`.live-card[data-key="${keySel}"]`);
       if (card) {
         const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
         const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
@@ -378,8 +535,8 @@ function updateLiveViews() {
     const canvas = document.getElementById('seating-canvas');
     if (canvas) {
       students.forEach(s => {
-        const nameSel = (window.CSS && CSS.escape) ? CSS.escape(s.name) : String(s.name).replace(/["\\\]]/g, '\\$&');
-        const card = canvas.querySelector(`.seat-card[data-name="${nameSel}"]`);
+        const keySel = (window.CSS && CSS.escape) ? CSS.escape(s.key) : String(s.key).replace(/["\\\]]/g, '\\$&');
+        const card = canvas.querySelector(`.seat-card[data-key="${keySel}"]`);
         if (card) {
           const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
           const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
@@ -406,9 +563,11 @@ function updateLiveViews() {
  * [LIVEビュー] カード一覧表示
  */
 function renderLiveCards(container, students) {
-  container.className = "flex-grow-1 overflow-auto"; 
+  container.className = "flex-grow-1 overflow-auto d-flex flex-column";
   if (students.length === 0) {
-    container.innerHTML = `<div class="text-muted p-5 text-center">表示する生徒がいません</div>`;
+    container.innerHTML = teacherEmptyState('bi-people', 'まだ児童がいません',
+      '名簿を登録すると、児童がログインした時点からここにリアルタイムで表示されます。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿を登録する</button>`);
   } else {
     container.innerHTML = `<div class="row row-cols-2 row-cols-md-4 row-cols-lg-5 g-3">${students.map(s => {
       const isOtherUnit = s.currentUnitId && s.currentUnitId !== appState.unit.id;
@@ -419,7 +578,7 @@ function renderLiveCards(container, students) {
 
       return `
       <div class="col">
-        <div data-name="${escapeHtml(s.name)}" class="live-card card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}" style="opacity: ${opacity}">
+        <div data-key="${escapeHtml(s.key)}" class="live-card card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}" style="opacity: ${opacity}">
           <div class="fw-bold text-truncate mb-2">${escapeHtml(s.name)}</div>
           <i class="bi bi-person-circle fs-1 my-2 ${isSos ? 'text-danger' : (isFocus ? 'text-info' : 'text-secondary')}"></i>
           <div class="small text-muted text-truncate task-text">${taskDisplay}</div>
@@ -434,37 +593,49 @@ function renderLiveCards(container, students) {
  * [一覧ビュー] ヒートマップ（進捗一覧表）
  */
 function renderHeatmap(container, students) {
-  container.className = "flex-grow-1 overflow-auto";
+  container.className = "flex-grow-1 overflow-auto d-flex flex-column";
   const currentTasks = getCurrentUnitTasks();
-  if (currentTasks.length === 0) { container.innerHTML = `<div class="text-center p-5">この単元の課題データなし</div>`; return; }
-  
-  const studentNames = students.map(s => s.name).sort();
-  if (studentNames.length === 0) { container.innerHTML = `<div class="text-center p-5">生徒データなし</div>`; return; }
+  if (currentTasks.length === 0) {
+    container.innerHTML = teacherEmptyState('bi-table', 'この単元にはまだ課題がありません',
+      '単元設計で課題をつくると、クラス全員×課題の進捗がここに一覧表示されます。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="setTeacherView('design')"><i class="bi bi-pencil-ruler me-1" aria-hidden="true"></i>単元設計をひらく</button>
+       <button class="btn btn-outline-primary btn-sm rounded-pill px-3" onclick="openUnitManagerModal()"><i class="bi bi-collection me-1" aria-hidden="true"></i>テンプレートから作成</button>`);
+    return;
+  }
+
+  const sortedStudents = students.slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'ja'));
+  if (sortedStudents.length === 0) {
+    container.innerHTML = teacherEmptyState('bi-people', 'まだ児童がいません',
+      '名簿を登録すると、児童ごとの進捗がここに一覧表示されます。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿を登録する</button>`);
+    return;
+  }
 
   let h = `<div class="table-responsive mb-4"><table class="table table-borderless heatmap-table"><thead><tr><th style="min-width:100px;text-align:left">名前</th>${currentTasks.map((t, i) => `<th role="button" tabindex="0" title="${escapeHtml(t.title)}" onclick="showTeacherTaskDetailSimple('${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); showTeacherTaskDetailSimple('${escJs(t.taskId)}');}">${t.step ? t.step.replace(/[^0-9]/g, '') : i + 1}</th>`).join('')}</tr></thead><tbody>`;
   
-  studentNames.forEach(n => {
-    const st = dataStore.liveStatus.find(d => d.name === n);
-    const isSos = st && (st.mode === 'たすけて' || st.mode === 'sos');
-    const isFocus = st && (st.mode === 'しゅうちゅう' || st.mode === 'focus');
+  sortedStudents.forEach(s => {
+    const n = s.name;
+    const key = s.key;
+    const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
+    const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
     const ic = isSos ? '<i class="bi bi-exclamation-circle-fill text-danger ms-1 animate__animated animate__flash"></i>' : (isFocus ? '<i class="bi bi-lightning-fill text-info ms-1"></i>' : '');
-    
-    // 生徒名クリックでポートフォリオ表示
-    h += `<tr><td class="text-start fw-bold text-truncate" role="button" tabindex="0" style="max-width:120px;cursor:pointer;text-decoration:underline" onclick="renderPortfolioModal('${escJs(n)}', true)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); renderPortfolioModal('${escJs(n)}', true);}">${escapeHtml(n)}${ic}</td>`;
-    
+
+    // 生徒名クリックでポートフォリオ表示（正準キーで本人のデータを引く）
+    h += `<tr><td class="text-start fw-bold text-truncate" role="button" tabindex="0" style="max-width:120px;cursor:pointer;text-decoration:underline" onclick="renderPortfolioModal('${escJs(key)}', true, '${escJs(n)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); renderPortfolioModal('${escJs(key)}', true, '${escJs(n)}');}">${escapeHtml(n)}${ic}</td>`;
+
     currentTasks.forEach(t => {
-      const p = (dataStore.clsProgress[n] && dataStore.clsProgress[n][t.taskId]) || {};
-      const stamp = (dataStore.clsFeedback[n] && dataStore.clsFeedback[n][t.taskId]);
-      
+      const p = (dataStore.clsProgress[key] && dataStore.clsProgress[key][t.taskId]) || {};
+      const stamp = (dataStore.clsFeedback[key] && dataStore.clsFeedback[key][t.taskId]);
+
       let cls = "", icon = "";
       if (p.status === '完了') cls = "heatmap-done";
       else if (p.status === '途中') cls = "heatmap-doing";
       else if (isSos) cls = "heatmap-sos"; // SOS中は未完了セルを点滅させる
       else if (isFocus) cls = "heatmap-focus";
-      
+
       if (stamp) { if(stamp==='check') icon='✅'; if(stamp==='good') icon='👍'; if(stamp==='great') icon='💮'; if(stamp==='support') icon='🚩'; }
-      
-      h += `<td><div class="heatmap-cell-wrapper" role="button" tabindex="0" onclick="showStudentTaskDetail('${escJs(n)}', '${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); showStudentTaskDetail('${escJs(n)}', '${escJs(t.taskId)}');}"><div class="heatmap-cell ${cls}" title="${escapeHtml(t.title)}">${icon}</div></div></td>`;
+
+      h += `<td><div class="heatmap-cell-wrapper" role="button" tabindex="0" onclick="showStudentTaskDetail('${escJs(key)}', '${escJs(n)}', '${escJs(t.taskId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); showStudentTaskDetail('${escJs(key)}', '${escJs(n)}', '${escJs(t.taskId)}');}"><div class="heatmap-cell ${cls}" title="${escapeHtml(t.title)}">${icon}</div></div></td>`;
     });
     h += '</tr>';
   });
@@ -480,7 +651,10 @@ function renderHeatmap(container, students) {
 function renderSeatingView(container) {
   const students = getFilteredStudents();
   if (students.length === 0) {
-    container.innerHTML = `<div class="text-center p-5 text-muted">表示する生徒がいません</div>`;
+    container.className = "flex-grow-1 d-flex flex-column";
+    container.innerHTML = teacherEmptyState('bi-grid-3x3-gap', 'まだ児童がいません',
+      '名簿を登録すると、教室の座席の並びで子どもたちを見守れるようになります。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿を登録する</button>`);
     return;
   }
 
@@ -498,10 +672,32 @@ function renderSeatingView(container) {
     </div>`;
 
   const canvas = document.getElementById('seating-canvas');
-  
+
+  // まだ座席が保存されていない児童は、全員 (50,50) に積み重なって出てしまっていた。
+  // 出席番号順にグリッドの空きマスへ自動整列させ、初回から「教室らしい」並びで始める。
+  // （自動配置は表示だけ。「配置を保存」を押した時点で確定する）
+  const GRID = CONSTANTS.SEAT_GRID_SIZE;
+  const COLS = 6;
+  const slotKey = (px, py) => Math.round((px - 10) / GRID) + ',' + Math.round((py - 10) / GRID);
+  const occupied = new Set(students.filter(s => s.x || s.y).map(s => slotKey(s.x, s.y)));
+  const autoPos = new Map(); // 正準キー → 座標（同名児童がいても別のマスに置く）
+  let slot = 0;
+  students
+    .filter(s => !s.x && !s.y)
+    .sort((a, b) => ((a.number || 999) - (b.number || 999)) || String(a.name).localeCompare(String(b.name)))
+    .forEach(s => {
+      while (occupied.has((slot % COLS) + ',' + Math.floor(slot / COLS))) slot++;
+      const px = (slot % COLS) * GRID + 10;
+      const py = Math.floor(slot / COLS) * GRID + 10;
+      occupied.add((slot % COLS) + ',' + Math.floor(slot / COLS));
+      autoPos.set(s.key, { x: px, y: py });
+      slot++;
+    });
+
   students.forEach(s => {
-    const x = s.x || 50;
-    const y = s.y || 50;
+    const auto = autoPos.get(s.key);
+    const x = s.x || (auto ? auto.x : 50);
+    const y = s.y || (auto ? auto.y : 50);
     const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
     const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
     
@@ -511,6 +707,7 @@ function renderSeatingView(container) {
     card.style.top = y + 'px';
     card.style.width = '100px';
     card.setAttribute('data-name', s.name);
+    card.setAttribute('data-key', s.key); // 保存・更新は正準キーで行う（同名児童の混線防止）
     
     card.innerHTML = `
       <div class="card-body p-2 text-center" style="cursor: move;" onmousedown="startDragSeat(event, this)" ontouchstart="startDragSeat(event, this)">
@@ -639,20 +836,22 @@ function saveSeating() {
   const cards = document.querySelectorAll('.seat-card');
   const coords = [];
   cards.forEach(c => {
+    const key = c.getAttribute('data-key') || '';
     coords.push({
       name: c.getAttribute('data-name'),
+      studentId: sidFromKey(key), // あれば本人IDで行を特定（同名児童の座席が混ざらない）
       x: parseInt(c.style.left, 10),
       y: parseInt(c.style.top, 10)
     });
   });
-  
+
   runTeacher('saveSeatCoordinates', [coords],
     () => {
       showToast('success', '座席配置を保存しました');
 
       // [追加] ローカルのデータストアも更新して、タブ切り替え等でリセットされないようにする
       coords.forEach(c => {
-        const student = dataStore.liveStatus.find(s => s.name === c.name);
+        const student = dataStore.liveStatus.find(s => c.studentId ? s.id === c.studentId : s.name === c.name);
         if (student) {
           student.x = c.x;
           student.y = c.y;
@@ -675,6 +874,25 @@ function saveSeating() {
     });
 }
 
+// まとめビューの「書きかけフィードバック」置き場。
+// ビュー・クラスタブの切り替えは画面全体を作り直すため、そのままだと
+// 入力途中のコメントが黙って消えていた。正準キーで下書きを持ち、再描画時に復元する。
+// 保存が成功した分だけ消す。
+let summaryDrafts = {};
+
+/** [アクション] まとめビューの入力を下書きとして覚える（oninput/onchange から呼ぶ） */
+function storeSummaryDraft(studentKey, uniqueId) {
+  const commentInput = document.getElementById(`fb-text-${uniqueId}`);
+  const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
+  summaryDrafts[studentKey] = {
+    feedback: commentInput ? commentInput.value : '',
+    stamp: stampEl ? stampEl.value : ''
+  };
+  // 未保存であることが分かるよう、保存ボタンを注意色にする
+  const btn = document.getElementById(`btn-save-${uniqueId}`);
+  if (btn) { btn.classList.remove('btn-primary'); btn.classList.add('btn-warning'); }
+}
+
 /**
  * [まとめビュー] ポートフォリオ一覧とフィードバック
  */
@@ -684,29 +902,33 @@ function renderSummaryListView(container) {
   const students = getSummaryStudentsSorted();
 
   if (students.length === 0) {
-    container.innerHTML = `<div class="text-center p-5 text-muted">表示する生徒がいません</div>`;
+    container.innerHTML = teacherEmptyState('bi-journal-check', 'まだ児童がいません',
+      '名簿を登録すると、児童のふりかえり・単元のまとめにスタンプとコメントを返せるようになります。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openRosterManagerModal()"><i class="bi bi-people me-1" aria-hidden="true"></i>名簿を登録する</button>`);
     return;
   }
 
   let tableRows = '';
   students.forEach((s, index) => {
-    // ポートフォリオデータ取得
+    // ポートフォリオデータ取得（正準キーで本人の分だけを引く）
     let pf = {};
-    if (dataStore.clsPortfolios && dataStore.clsPortfolios[s.name] && dataStore.clsPortfolios[s.name][appState.unit.id]) {
-      const rawPf = dataStore.clsPortfolios[s.name][appState.unit.id];
+    if (dataStore.clsPortfolios && dataStore.clsPortfolios[s.key] && dataStore.clsPortfolios[s.key][appState.unit.id]) {
+      const rawPf = dataStore.clsPortfolios[s.key][appState.unit.id];
       pf = (typeof rawPf === 'object') ? rawPf : { summary: rawPf, feedback: "", stamp: "" };
     }
     const summary = pf.summary || "";
-    const feedback = pf.feedback || "";
-    const stamp = pf.stamp || "";
-    const pfStudentId = pf.studentId || ""; // 本人メール（あれば本人の行にフィードバックを着地させる）
+    // 書きかけの下書きがあれば、保存済みの値より優先して復元する
+    const draft = summaryDrafts[s.key];
+    const feedback = draft ? draft.feedback : (pf.feedback || "");
+    const stamp = draft ? draft.stamp : (pf.stamp || "");
+    const pfStudentId = pf.studentId || sidFromKey(s.key); // 本人メール（あれば本人の行にフィードバックを着地させる）
 
     // スキル集計
     const skillCounts = {};
     SKILL_DEFINITIONS.forEach(def => skillCounts[def.id] = 0);
-    
-    if (dataStore.clsReflections && dataStore.clsReflections[s.name] && dataStore.clsReflections[s.name][appState.unit.id]) {
-      const reflections = dataStore.clsReflections[s.name][appState.unit.id];
+
+    if (dataStore.clsReflections && dataStore.clsReflections[s.key] && dataStore.clsReflections[s.key][appState.unit.id]) {
+      const reflections = dataStore.clsReflections[s.key][appState.unit.id];
       Object.values(reflections).forEach(r => {
         if (r.skills && Array.isArray(r.skills)) {
           r.skills.forEach(sid => { if (skillCounts[sid] !== undefined) skillCounts[sid]++; });
@@ -730,7 +952,7 @@ function renderSummaryListView(container) {
       <tr>
         <td class="st-col-name text-center text-muted small align-middle">${index + 1}</td>
         <td class="st-col-name align-middle">
-          <div class="fw-bold text-primary" style="cursor:pointer;" onclick="renderPortfolioModal('${escJs(s.name)}', true)">
+          <div class="fw-bold text-primary" style="cursor:pointer;" onclick="renderPortfolioModal('${escJs(s.key)}', true, '${escJs(s.name)}')">
             ${escapeHtml(s.name)} <i class="bi bi-box-arrow-up-right small ms-1 text-muted"></i>
           </div>
         </td>
@@ -744,14 +966,14 @@ function renderSummaryListView(container) {
         </td>
         <td class="st-col-feedback align-middle">
           <div class="stamp-select-group">
-            <label><input type="radio" name="stamp-${uniqueId}" value="check" class="stamp-input" ${stamp==='check'?'checked':''}><span class="stamp-option" title="確認">✅</span></label>
-            <label><input type="radio" name="stamp-${uniqueId}" value="good" class="stamp-input" ${stamp==='good'?'checked':''}><span class="stamp-option" title="いいね">👍</span></label>
-            <label><input type="radio" name="stamp-${uniqueId}" value="great" class="stamp-input" ${stamp==='great'?'checked':''}><span class="stamp-option" title="すばらしい">💮</span></label>
-            <label><input type="radio" name="stamp-${uniqueId}" value="support" class="stamp-input" ${stamp==='support'?'checked':''}><span class="stamp-option" title="応援">🚩</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="check" class="stamp-input" ${stamp==='check'?'checked':''} onchange="storeSummaryDraft('${escJs(s.key)}', '${uniqueId}')"><span class="stamp-option" title="確認">✅</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="good" class="stamp-input" ${stamp==='good'?'checked':''} onchange="storeSummaryDraft('${escJs(s.key)}', '${uniqueId}')"><span class="stamp-option" title="いいね">👍</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="great" class="stamp-input" ${stamp==='great'?'checked':''} onchange="storeSummaryDraft('${escJs(s.key)}', '${uniqueId}')"><span class="stamp-option" title="すばらしい">💮</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="support" class="stamp-input" ${stamp==='support'?'checked':''} onchange="storeSummaryDraft('${escJs(s.key)}', '${uniqueId}')"><span class="stamp-option" title="応援">🚩</span></label>
           </div>
           <div class="input-group input-group-sm">
-            <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${escapeHtml(feedback)}">
-            <button id="btn-save-${uniqueId}" class="btn btn-primary" onclick="saveListFeedback('${escJs(s.name)}', '${uniqueId}', '${escJs(pfStudentId)}')">保存</button>
+            <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${escapeHtml(feedback)}" oninput="storeSummaryDraft('${escJs(s.key)}', '${uniqueId}')">
+            <button id="btn-save-${uniqueId}" class="btn ${draft ? 'btn-warning' : 'btn-primary'}" onclick="saveListFeedback('${escJs(s.key)}', '${escJs(s.name)}', '${uniqueId}', '${escJs(pfStudentId)}')">保存</button>
           </div>
         </td>
       </tr>`;
@@ -783,7 +1005,7 @@ function renderSummaryListView(container) {
     </div>`;
 }
 
-function saveListFeedback(studentName, uniqueId, studentId) {
+function saveListFeedback(studentKey, studentName, uniqueId, studentId) {
   const comment = document.getElementById(`fb-text-${uniqueId}`).value;
   const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
   const stamp = stampEl ? stampEl.value : "";
@@ -794,11 +1016,19 @@ function saveListFeedback(studentName, uniqueId, studentId) {
   btn.innerHTML = '...';
 
   // サーバーへ保存（studentId があれば本人の行に着地。無ければサーバー側で studentName にフォールバック）
-  runTeacher('savePortfolioFeedback', [studentName, appState.unit.id, comment, stamp, studentId || ''],
+  runTeacher('savePortfolioFeedback', [studentName, appState.unit.id, comment, stamp, studentId || sidFromKey(studentKey)],
     () => {
       showToast('success', '保存しました');
+      // 保存できたので下書きを消し、ローカルデータにも反映（再描画時に保存済みの値が出る）
+      delete summaryDrafts[studentKey];
+      if (!dataStore.clsPortfolios[studentKey]) dataStore.clsPortfolios[studentKey] = {};
+      if (!dataStore.clsPortfolios[studentKey][appState.unit.id]) dataStore.clsPortfolios[studentKey][appState.unit.id] = { summary: '', feedback: '', stamp: '', studentId: sidFromKey(studentKey) };
+      dataStore.clsPortfolios[studentKey][appState.unit.id].feedback = comment;
+      dataStore.clsPortfolios[studentKey][appState.unit.id].stamp = stamp;
       btn.disabled = false;
       btn.innerHTML = originalText;
+      btn.classList.remove('btn-warning');
+      btn.classList.add('btn-primary');
     },
     (e) => {
       handleError(e);
@@ -821,14 +1051,15 @@ function saveAllListFeedbacks() {
     const uniqueId = `pf-${index}`;
     const commentInput = document.getElementById(`fb-text-${uniqueId}`);
     const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
-    
+
     if (commentInput) {
       // 本人メール（あれば）を添えて、先生フィードバックを本人の行へ確実に着地させる。
-      let sid = "";
-      if (dataStore.clsPortfolios && dataStore.clsPortfolios[s.name] && dataStore.clsPortfolios[s.name][appState.unit.id]) {
-        sid = dataStore.clsPortfolios[s.name][appState.unit.id].studentId || "";
+      let sid = sidFromKey(s.key);
+      if (!sid && dataStore.clsPortfolios && dataStore.clsPortfolios[s.key] && dataStore.clsPortfolios[s.key][appState.unit.id]) {
+        sid = dataStore.clsPortfolios[s.key][appState.unit.id].studentId || "";
       }
       feedbackList.push({
+        studentKey: s.key,
         studentName: s.name,
         studentId: sid,
         unitId: appState.unit.id,
@@ -841,6 +1072,15 @@ function saveAllListFeedbacks() {
   runTeacher('saveAllPortfolios', [feedbackList],
     () => {
       showToast('success', '全員分を保存しました');
+      // 全員分が保存できたので下書きを消し、ローカルデータにも反映する
+      summaryDrafts = {};
+      feedbackList.forEach(f => {
+        if (!dataStore.clsPortfolios[f.studentKey]) dataStore.clsPortfolios[f.studentKey] = {};
+        if (!dataStore.clsPortfolios[f.studentKey][f.unitId]) dataStore.clsPortfolios[f.studentKey][f.unitId] = { summary: '', feedback: '', stamp: '', studentId: f.studentId };
+        dataStore.clsPortfolios[f.studentKey][f.unitId].feedback = f.feedback;
+        dataStore.clsPortfolios[f.studentKey][f.unitId].stamp = f.stamp;
+      });
+      renderSummaryListView(document.getElementById('t-area'));
       btn.disabled = false;
       btn.innerHTML = originalHtml;
     },
@@ -863,6 +1103,10 @@ var dashboardCache = null;                 // { submissions:[...], worksheets:[.
 var dashboardFilter = { taskId: 'all', status: 'all', name: '', sort: 'submittedAt' };
 var dashboardBatch = null;                 // AI 一括コメントのレビュー中データ（配列）または null
 var dashboardBatchTitle = '';              // AI 一括レビューの見出し（授業名）
+// カードは一度に全部並べない。base64 サムネイル付きカードを何百枚も一気に
+// innerHTML すると Chromebook では描画が数秒止まるため、24枚ずつ段階表示する。
+var DASH_PAGE_SIZE = 24;
+var dashboardShownCount = DASH_PAGE_SIZE;
 
 // 入力中（input/textarea/select/contentEditable）ならキーボード操作を横取りしない
 function isDashTypingTarget(t) {
@@ -1021,11 +1265,12 @@ function renderTeacherDashboardView(el) {
 }
 
 // フィルタ操作ハンドラ ---------------------------------------------------------
-function setDashTask(v) { dashboardFilter.taskId = v; dashboardBatch = null; renderTeacherDashboardView(document.getElementById('t-area')); }
-function setDashStatus(v) { dashboardFilter.status = v; renderDashboardGrid(); }
-function setDashSort(v) { dashboardFilter.sort = v; renderDashboardGrid(); }
-function setDashName(v) { dashboardFilter.name = v; renderDashboardGrid(); }
-function refreshDashboard() { dashboardCache = null; dashboardBatch = null; renderTeacherDashboardView(document.getElementById('t-area')); }
+function setDashTask(v) { dashboardFilter.taskId = v; dashboardBatch = null; dashboardShownCount = DASH_PAGE_SIZE; renderTeacherDashboardView(document.getElementById('t-area')); }
+function setDashStatus(v) { dashboardFilter.status = v; dashboardShownCount = DASH_PAGE_SIZE; renderDashboardGrid(); }
+function setDashSort(v) { dashboardFilter.sort = v; dashboardShownCount = DASH_PAGE_SIZE; renderDashboardGrid(); }
+function setDashName(v) { dashboardFilter.name = v; dashboardShownCount = DASH_PAGE_SIZE; renderDashboardGrid(); }
+function refreshDashboard() { dashboardCache = null; dashboardBatch = null; dashboardShownCount = DASH_PAGE_SIZE; renderTeacherDashboardView(document.getElementById('t-area')); }
+function showMoreDashboardCards() { dashboardShownCount += DASH_PAGE_SIZE; renderDashboardGrid(); }
 
 // カードグリッド＋統計バッジだけを再描画（コントロールは作り直さない＝入力フォーカスを保つ）
 function renderDashboardGrid() {
@@ -1043,11 +1288,20 @@ function renderDashboardGrid() {
       + '<span class="badge bg-warning text-dark">未添削 ' + (total - graded) + '</span>';
   }
 
-  var list = dashboardVisible();
-  if (list.length === 0) {
-    gridEl.innerHTML = '<div class="text-center p-5 text-muted">条件に合う提出物がありません</div>';
+  var fullList = dashboardVisible();
+  if (fullList.length === 0) {
+    var noneAtAll = !dashboardCache || (dashboardCache.submissions || []).length === 0;
+    gridEl.innerHTML = noneAtAll
+      ? teacherEmptyState('bi-check2-square', 'まだ提出物がありません',
+          '単元設計でワークシートを用意すると、児童はタスクを開いてその場で回答・提出できます。提出されるとここに並びます。',
+          `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="setTeacherView('design')"><i class="bi bi-pencil-ruler me-1" aria-hidden="true"></i>単元設計をひらく</button>`)
+      : '<div class="text-center p-5 text-muted">条件に合う提出物がありません</div>';
     return;
   }
+
+  // 段階表示：まず dashboardShownCount 枚だけ描き、残りは「もっと見る」で足す
+  var list = fullList.slice(0, dashboardShownCount);
+  var remaining = fullList.length - list.length;
 
   var cards = list.map(function (s) {
     var graded = MiraiShared.normSubmission(s.status) === 'graded';
@@ -1072,7 +1326,11 @@ function renderDashboardGrid() {
       + '</button>';
   }).join('');
 
-  gridEl.innerHTML = '<div class="dash-card-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0.75rem">' + cards + '</div>';
+  var moreBtn = remaining > 0
+    ? '<div class="text-center py-3"><button type="button" class="btn btn-outline-primary rounded-pill px-4" onclick="showMoreDashboardCards()"><i class="bi bi-chevron-down me-1" aria-hidden="true"></i>もっと見る（のこり ' + remaining + '件）</button></div>'
+    : '';
+
+  gridEl.innerHTML = '<div class="dash-card-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0.75rem">' + cards + '</div>' + moreBtn;
 }
 
 // グリッド内キーボード操作：矢印で移動、Enter で開く。入力欄では無効。
@@ -1134,8 +1392,7 @@ function openDashboardDetail(rowIndex) {
     + '  <button type="button" class="btn btn-primary btn-sm rounded-pill px-3" onclick="saveDashboardComment(\'' + escJs(String(s.rowIndex)) + '\')"><i class="bi bi-save me-1" aria-hidden="true"></i>コメントを保存</button>'
     + '  <button type="button" class="btn btn-danger btn-sm rounded-pill px-3" onclick="openDashboardGrading(\'' + escJs(String(s.rowIndex)) + '\')"><i class="bi bi-pencil-fill me-1" aria-hidden="true"></i>赤ペンで添削</button>'
     + '  <button type="button" class="btn btn-outline-secondary btn-sm rounded-pill px-3" onclick="closeDashboardDetail()">閉じる</button>'
-    + '</div>'
-    + '<div class="form-text small mt-1">赤ペン添削で返却したあとは「更新」を押すと状態が反映されます。</div>';
+    + '</div>';
   panel.classList.remove('d-none');
   // Esc で閉じる（入力中は横取りしない）
   panel.onkeydown = function (e) {
@@ -1175,7 +1432,7 @@ function saveDashboardComment(rowIndex) {
   });
 }
 
-// 赤ペン添削（フルキャンバス）を開く。返却後の状態反映は「更新」で行う。
+// 赤ペン添削（フルキャンバス）を開く。返却すると onWorksheetGraded で即時反映される。
 function openDashboardGrading(rowIndex) {
   var s = findDashSub(rowIndex);
   if (!s) return;
@@ -1184,6 +1441,22 @@ function openDashboardGrading(rowIndex) {
     Worksheet.openGrading(s);
   } else {
     handleError({ message: '添削画面を開けませんでした' });
+  }
+}
+
+/**
+ * [連携] 赤ペン添削の「返却」完了時に js_worksheet から呼ばれる。
+ * キャッシュ上の該当提出を添削ずみへ更新し、ダッシュボードを開いていれば描き直す。
+ * これで返却のたびに「更新」を押してすべての提出物を取り直す必要がなくなった。
+ */
+function onWorksheetGraded(rowIndex, feedbackText) {
+  var s = findDashSub(rowIndex);
+  if (s) {
+    s.status = 'graded';
+    s.feedbackText = feedbackText;
+  }
+  if (appState.mode === 'teacher' && appState.view.teacher === 'dashboard' && dashboardBatch === null) {
+    renderDashboardGrid();
   }
 }
 
@@ -1278,9 +1551,17 @@ function renderTeacherDesignView(container) {
 
   container.className = "d-flex flex-column flex-grow-1 overflow-hidden h-100";
   container.style.height = "100%";
-  
-  const currentTasks = getCurrentUnitTasks(); 
-  const totalHours = appState.unit.totalHours; 
+
+  // 単元がまだ1つも無いときは、設計ボードではなく作成への案内を出す
+  if (!appState.unit.id) {
+    container.innerHTML = teacherEmptyState('bi-pencil-ruler', 'まだ単元がありません',
+      'まずは単元をつくりましょう。テンプレートなら、導入〜まとめまで組み立てずみの単元がワンクリックで用意できます。',
+      `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="openUnitManagerModal()"><i class="bi bi-collection me-1" aria-hidden="true"></i>テンプレートから作成</button>`);
+    return;
+  }
+
+  const currentTasks = getCurrentUnitTasks();
+  const totalHours = appState.unit.totalHours;
   
   const taskPool = [];
   const hoursMap = {}; 
@@ -2252,9 +2533,10 @@ function openRosterManagerModal() {
             <label class="form-label small fw-bold text-muted">
               <i class="bi bi-clipboard"></i> Excel/スプレッドシートから貼り付け
             </label>
-            <textarea id="paste-area" class="form-control flex-grow-1 small" 
-                      placeholder="ここにExcelやスプレッドシートのデータを貼り付けると、自動的に右側の表に取り込まれます。&#13;&#10;&#13;&#10;[番号] [名前] の順だと認識精度が上がります。"
+            <textarea id="paste-area" class="form-control flex-grow-1 small"
+                      placeholder="ここにExcelやスプレッドシートのデータを貼り付けると、自動的に右側の表に取り込まれます。&#13;&#10;&#13;&#10;[番号] [名前] [メール] の順だと認識精度が上がります（メールは任意）。"
                       style="resize: none; font-family: monospace; font-size: 0.85rem;"></textarea>
+            <div class="x-small text-muted mt-1">メール（児童のGoogleアカウント）を入れておくと、同じ名前の児童がいても記録が正確に結びつきます。</div>
           </div>
 
           <!-- 右側：編集グリッド -->
@@ -2265,7 +2547,8 @@ function openRosterManagerModal() {
                   <tr>
                     <th style="width: 60px;" class="text-center">No.</th>
                     <th>氏名</th>
-                    <th style="width: 80px;" class="text-center">在籍</th>
+                    <th style="width: 34%;">メール（任意）</th>
+                    <th style="width: 70px;" class="text-center">在籍</th>
                     <th style="width: 40px;"></th>
                   </tr>
                 </thead>
@@ -2320,9 +2603,10 @@ function loadRosterFromDB() {
     .map(r => ({
       number: r.number || 999,
       name: r.name,
+      studentId: r.studentId || '', // 本人メール（任意）
       isActive: r.isActive !== false // undefined or true -> true
     }));
-  
+
   renderRosterTable();
 }
 
@@ -2335,6 +2619,7 @@ function renderRosterTable() {
     tr.innerHTML = `
       <td><input type="number" class="form-control form-control-sm border-0 p-0 text-center" value="${escapeHtml(student.number)}" onchange="updateRosterData(${index}, 'number', this.value)"></td>
       <td><input type="text" class="form-control form-control-sm border-0 p-0 px-1" value="${escapeHtml(student.name)}" onchange="updateRosterData(${index}, 'name', this.value)"></td>
+      <td><input type="text" class="form-control form-control-sm border-0 p-0 px-1 text-muted" value="${escapeHtml(student.studentId || '')}" placeholder="xxx@school.jp" onchange="updateRosterData(${index}, 'studentId', this.value)"></td>
       <td class="text-center align-middle">
         <div class="form-check form-switch d-flex justify-content-center">
           <input class="form-check-input" type="checkbox" ${student.isActive ? 'checked' : ''} onchange="updateRosterData(${index}, 'isActive', this.checked)" title="${student.isActive?'表示':'非表示(転出)'}">
@@ -2359,6 +2644,7 @@ function renderRosterTable() {
 function updateRosterData(index, field, value) {
   if (field === 'number') rosterEditData[index].number = parseInt(value) || 0;
   if (field === 'name') rosterEditData[index].name = value;
+  if (field === 'studentId') rosterEditData[index].studentId = String(value || '').trim();
   if (field === 'isActive') {
       rosterEditData[index].isActive = value;
       renderRosterTable(); // 色更新のため再描画
@@ -2367,7 +2653,7 @@ function updateRosterData(index, field, value) {
 
 function addRosterRow() {
   const nextNum = rosterEditData.length > 0 ? Math.max(...rosterEditData.map(s=>s.number)) + 1 : 1;
-  rosterEditData.push({ number: nextNum, name: '', isActive: true });
+  rosterEditData.push({ number: nextNum, name: '', studentId: '', isActive: true });
   renderRosterTable();
 }
 
@@ -2401,7 +2687,12 @@ function parsePastedText(text) {
   if (lines.length === 0) return;
 
   let addedCount = 0;
-  
+  let skippedCount = 0;
+
+  // 重複チェック用：既存の名前（スペース表記ゆれを吸収して比較）
+  const normName = n => String(n).replace(/[\s　]+/g, '');
+  const seen = new Set(rosterEditData.map(s => normName(s.name)));
+
   lines.forEach(line => {
     // タブまたはカンマで分割
     const cols = line.split(/\t|,/).map(c => c.trim()).filter(c => c);
@@ -2409,13 +2700,18 @@ function parsePastedText(text) {
 
     let num = 0;
     let name = "";
-    
+    let email = "";
+
+    // メールらしき列（@ を含む）を先に抜き出す（位置はどこでもよい）
+    const emailIdx = cols.findIndex(c => c.indexOf('@') > 0);
+    if (emailIdx >= 0) { email = cols[emailIdx]; cols.splice(emailIdx, 1); }
+
     // データ解析ロジック
     // パターン1: [番号] [名前] ...
     if (cols.length >= 2 && !isNaN(cols[0])) {
         num = parseInt(cols[0]);
         name = cols[1];
-    } 
+    }
     // パターン2: [名前] のみ
     else if (cols.length >= 1) {
         // 自動採番: 現在の最大値 + 1
@@ -2423,16 +2719,21 @@ function parsePastedText(text) {
         num = maxNum + 1;
         name = cols[0];
     }
-    
+
     if (name) {
-        // 名前が重複していないか簡易チェック（任意）
-        rosterEditData.push({ number: num, name: name, isActive: true });
+        // 同じ名前はスキップする（同じ表を2回貼ると名簿が倍になる事故の防止）
+        if (seen.has(normName(name))) { skippedCount++; return; }
+        seen.add(normName(name));
+        rosterEditData.push({ number: num, name: name, studentId: email, isActive: true });
         addedCount++;
     }
   });
-  
-  if (addedCount > 0) {
-      showToast('success', `${addedCount}件を取り込みました`);
+
+  if (addedCount > 0 || skippedCount > 0) {
+      const msg = skippedCount > 0
+        ? `${addedCount}件を取り込みました（すでにある${skippedCount}件はスキップ）`
+        : `${addedCount}件を取り込みました`;
+      showToast(addedCount > 0 ? 'success' : 'info', msg);
       renderRosterTable();
   }
 }
@@ -2484,9 +2785,29 @@ function submitSaveRoster() {
   const classId = document.getElementById('roster-class').value.trim();
   // このモーダルは確認ボタン非表示のため showValidationMessage は使えない
   if (!classId) { showToast('error', 'クラス名を入力してください'); return; }
-  
+
   if (rosterEditData.length === 0) {
      if(!confirm('名簿が空ですが、このまま保存しますか？（現在の名簿が消去されます）')) return;
+  }
+
+  // 同名の在籍児童がいると、ログインの名前選択・計画・スタンプの記録が区別できない。
+  // 保存は止めないが、必ず気づけるように具体名を挙げて確認する。
+  const normName = n => String(n).replace(/[\s　]+/g, '');
+  const seenNames = new Map();
+  const dupeNames = new Set();
+  rosterEditData.forEach(s => {
+    if (s.isActive === false || !s.name || !s.name.trim()) return;
+    const key = normName(s.name);
+    if (seenNames.has(key)) dupeNames.add(seenNames.get(key));
+    else seenNames.set(key, s.name.trim());
+  });
+  if (dupeNames.size > 0) {
+    const ok = confirm(
+      '同じ名前の児童が2人以上います：' + Array.from(dupeNames).join('、') + '\n\n' +
+      '名前が同じだと、ログインの名前選択や記録の区別ができません。\n' +
+      '「山田た」「山田ゆ」のように区別できる表示名にすることをおすすめします。\n\n' +
+      'このまま保存しますか？');
+    if (!ok) return;
   }
 
   showLoading();
@@ -2508,24 +2829,27 @@ function submitSaveRoster() {
 //  8. その他詳細モーダル
 // ==========================================
 
-function showStudentTaskDetail(name, tid) {
+function showStudentTaskDetail(key, name, tid) {
   const t = dataStore.masterTasks.find(x => x.taskId === tid);
   if (!t) return;
-  const p = (dataStore.clsProgress[name] && dataStore.clsProgress[name][tid]) || {};
+  const p = (dataStore.clsProgress[key] && dataStore.clsProgress[key][tid]) || {};
+  const args = `'${escJs(key)}','${escJs(name)}','${escJs(tid)}'`;
   Swal.fire({
     title: `${escapeHtml(name)} さんの状況`,
-    html: `<div class="text-start"><h6 class="fw-bold text-primary">${escapeHtml(t.title)}</h6><div class="mb-3"><span class="badge bg-secondary me-1">状態: ${escapeHtml(p.status||'未')}</span></div><div class="p-3 bg-light rounded mb-3 small">${escapeHtml(p.reflection)||'メモなし'}</div><hr><div class="d-flex justify-content-center gap-2"><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','check')">✅</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','good')">👍</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','great')">💮</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp('${escJs(name)}','${escJs(tid)}','support')">🚩</button></div></div>`,
+    html: `<div class="text-start"><h6 class="fw-bold text-primary">${escapeHtml(t.title)}</h6><div class="mb-3"><span class="badge bg-secondary me-1">状態: ${escapeHtml(p.status||'未')}</span></div><div class="p-3 bg-light rounded mb-3 small">${escapeHtml(p.reflection)||'メモなし'}</div><hr><div class="d-flex justify-content-center gap-2"><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp(${args},'check')">✅</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp(${args},'good')">👍</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp(${args},'great')">💮</button><button class="btn btn-outline-primary rounded-circle p-2" style="width:50px;height:50px;font-size:1.5rem" onclick="sendStamp(${args},'support')">🚩</button></div></div>`,
     showConfirmButton: false,
     showCloseButton: true
   });
 }
 
-function sendStamp(name, tid, stamp) {
-  if (!dataStore.clsFeedback[name]) dataStore.clsFeedback[name] = {};
-  dataStore.clsFeedback[name][tid] = stamp;
+function sendStamp(key, name, tid, stamp) {
+  if (!dataStore.clsFeedback[key]) dataStore.clsFeedback[key] = {};
+  dataStore.clsFeedback[key][tid] = stamp;
   renderTeacherDashboardContent(); // 更新
   showToast('success', 'スタンプ送信');
-  runTeacher('sendFeedback', [name, tid, stamp, appState.view.teacherClassId !== 'All' ? appState.view.teacherClassId : '']);
+  // キーが本人メールならスタンプに添える。児童側は ID がある行を ID でだけ
+  // 照合するため、同名児童への誤配を防げる（名前フォールバックのキーは従来動作）。
+  runTeacher('sendFeedback', [name, tid, stamp, appState.view.teacherClassId !== 'All' ? appState.view.teacherClassId : '', sidFromKey(key)]);
 }
 
 /**

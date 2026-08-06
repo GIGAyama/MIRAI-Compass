@@ -120,7 +120,8 @@ let appState = {
   mode: 'student', // 現在のモード ('student' または 'teacher')
   user: {
     name: "",      // ログイン中の名前
-    classId: ""    // ログイン中のクラス
+    classId: "",   // ログイン中のクラス
+    key: ""        // 自分の正準キー（サーバーの getStudentProgress が返す myKey）
   },
   view: {
     student: 'daily',   // 生徒の表示 ('daily':今日の課題, 'planning':計画, 'portfolio':ポートフォリオ, 'plaza':ひろば)
@@ -343,6 +344,11 @@ function startAutoRefresh() {
       fetchStudentPulse();
     }
 
+    // 先生モードでは30秒に1回、クラスの進捗集計も取得する（進捗一覧のライブ更新）。
+    if (appState.mode === 'teacher' && pollTickCount % 3 === 0 && typeof fetchTeacherProgressSnapshot === 'function') {
+      fetchTeacherProgressSnapshot();
+    }
+
   }, CONSTANTS.REFRESH_INTERVAL);
 }
 
@@ -506,6 +512,12 @@ function renderApp() {
     if (appState.mode === 'teacher') {
       // 先生モード
       if (typeof removeStudentBottomNav === 'function') removeStudentBottomNav(); // 児童タブバーを消す
+      // 児童モードの浮遊UI（タイマー・授業通知バー）が残らないよう片付ける
+      ['my-timer-widget', 'timer-launcher', 'schedule-notify-bar'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+      });
+      document.body.classList.remove('has-schedule-bar');
       mainEl.classList.add('teacher-mode'); // 横幅制限を解除
       settingsBtn.classList.remove('d-none'); // 設定ボタン表示
       exitBtn.classList.remove('d-none');     // 終了ボタン表示
@@ -628,9 +640,13 @@ function checkScheduleAndNotify() {
       document.body.appendChild(notifyBar);
     }
     notifyBar.innerHTML = `<i class="bi bi-broadcast me-2"></i><span class="fw-bold">${msgHtml}</span> <small class="ms-2 border rounded-pill px-2">移動する</small>`;
+    // バーは fixed なので、そのままだと画面上部の内容（あいさつ等）に重なる。
+    // 本文側に余白を足すためのクラスを付ける（css.html 参照）。
+    document.body.classList.add('has-schedule-bar');
   } else {
     // 時間外なら通知バーを消す
     if (notifyBar) notifyBar.remove();
+    document.body.classList.remove('has-schedule-bar');
   }
 }
 
@@ -742,6 +758,40 @@ var MiraiShared = (function () {
 var escUrl = MiraiShared.escUrl;
 var escJs = MiraiShared.escJs;
 
+// =============================================================
+//  児童の正準キー（サーバーの studentKey() と同じ規則）
+// =============================================================
+// クラス集計（clsProgress / clsFeedback / clsPlans / clsReflections /
+// clsPortfolios / clsMyTasks）はすべてこのキーで引く。
+//   ・本人メールが分かる → メールがキー
+//   ・分からない         → 'name:' + 表示名
+function studentKeyOf(sid, name) {
+  const s = String(sid || '').trim();
+  return s ? s : 'name:' + String(name || '');
+}
+
+// キーから本人メール（studentId）を取り出す。名前フォールバックのキーなら空文字。
+function sidFromKey(key) {
+  const k = String(key || '');
+  return k.indexOf('name:') === 0 ? '' : k;
+}
+
+/**
+ * 名簿の1人分から正準キーを解決する。
+ * ①名簿にメールがあればそれ（最も確実）
+ * ②無ければ、ログイン記録（LiveStatus）から同名・同クラスの本人IDを探す
+ * ③どちらも無ければ名前フォールバック
+ * ②は同名児童がいると先勝ちになるため、名簿へのメール入力を推奨（名簿画面に列あり）。
+ */
+function resolveStudentKey(rosterEntry) {
+  if (!rosterEntry) return 'name:';
+  if (rosterEntry.studentId) return String(rosterEntry.studentId);
+  const live = (dataStore.liveStatus || []).find(s =>
+    s.name === rosterEntry.name && (!rosterEntry.classId || !s.classId || s.classId === rosterEntry.classId));
+  if (live && live.id) return String(live.id);
+  return 'name:' + String(rosterEntry.name || '');
+}
+
 // ステップ文字列 ("Step 1") から数値 (1) を取り出す
 function getStepNumber(stepStr) {
   if(!stepStr) return -1;
@@ -750,10 +800,42 @@ function getStepNumber(stepStr) {
 }
 
 // トースト通知（右上のポップアップ）
+// ⚠️ SweetAlert2 は同時に1つしか表示できず、モーダル（名簿管理・単元管理など）を
+//    開いている最中に Swal のトーストを出すと、モーダルごと閉じて編集内容が消える。
+//    実際に、ポーリングの SOS 警告トーストが名簿編集中のモーダルを閉じる事故が起きる。
+//    モーダル表示中は Swal を使わない自前の軽量トーストに切り替える。
 function showToast(icon, title) {
-  Swal.fire({ toast: true, position: 'top-end', icon: icon, title: title, timer: 2000, showConfirmButton: false });
+  const popup = (typeof Swal !== 'undefined' && Swal.isVisible()) ? Swal.getPopup() : null;
+  const modalOpen = popup && !popup.classList.contains('swal2-toast');
+  if (modalOpen) {
+    showLiteToast(icon, title);
+  } else {
+    Swal.fire({ toast: true, position: 'top-end', icon: icon, title: title, timer: 2000, showConfirmButton: false });
+  }
   // スクリーンリーダー向けに読み上げる（エラー系アイコンは alert 領域へ）
   if (typeof announce === 'function') announce(title, icon === 'error' || icon === 'warning');
+}
+
+// Swal を使わない軽量トースト（モーダルと共存できる）
+function showLiteToast(icon, title) {
+  let host = document.getElementById('lite-toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'lite-toast-host';
+    document.body.appendChild(host);
+  }
+  const colors = { success: '#2e9e63', info: '#1a73e8', warning: '#b5850c', error: '#d33333' };
+  const icons = { success: 'bi-check-circle-fill', info: 'bi-info-circle-fill', warning: 'bi-exclamation-triangle-fill', error: 'bi-x-circle-fill' };
+  const el = document.createElement('div');
+  el.className = 'lite-toast';
+  el.style.setProperty('--lt-color', colors[icon] || colors.info);
+  el.innerHTML = `<i class="bi ${icons[icon] || icons.info}" aria-hidden="true"></i><span></span>`;
+  el.querySelector('span').textContent = title; // textContent 代入なのでエスケープ不要
+  host.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 350);
+  }, 2200);
 }
 
 // エラー表示

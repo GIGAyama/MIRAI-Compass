@@ -56,7 +56,10 @@ const DB_SCHEMA = {
   },
   StudentRoster: {
     name: 'StudentRoster',
-    headers: ['rosterId', 'classId', 'studentNumber', 'studentName', 'isActive', 'updatedAt']
+    // studentId（末尾・任意）: 児童の Google アカウントのメールアドレス。
+    // 入力しておくと、同名児童がいても名簿と学習記録が正確に結びつく。
+    // 空欄でも動く（その場合はログイン時の表示名で結びつける従来方式）。
+    headers: ['rosterId', 'classId', 'studentNumber', 'studentName', 'isActive', 'updatedAt', 'studentId']
   },
   // 統合: みらいパスポートのワークシート本体（旧・別アプリDBを取り込み）
   Worksheets: {
@@ -70,6 +73,19 @@ const DB_SCHEMA = {
     headers: ['responseId', 'taskId', 'studentId', 'studentName', 'submittedAt', 'canvasImage', 'textContent', 'status', 'feedbackText', 'score', 'feedbackJson', 'canvasJson', 'isPublic', 'reactions', 'reflectionText', 'studentAnswers']
   }
 };
+
+// =============================================================
+//  児童の正準キー（canonical key）
+// =============================================================
+// すべての先生向け集計は、この1つのキー規則で児童をまとめる。
+//   ・studentId（本人の Google メール）が分かる行 → そのメールがキー
+//   ・分からない行（旧データ・名簿のみの児童）    → 'name:' + 表示名
+// 児童の自己書き込みは常に studentId 付きなので、同名児童のデータは
+// 混ざらない。クライアント側にも同じ規則の studentKeyOf() がある。
+function studentKey(sid, name) {
+  const s = String(sid || '').trim();
+  return s ? s : 'name:' + String(name || '');
+}
 
 // === ワークシート/回答シートの列番号（1始まり）: 統合したパスポート機能で使用 =========
 var WS_COL_TASK_ID      = 1;  // A列
@@ -307,37 +323,39 @@ function getData() {
       x: Number(r[8]) || 0, y: Number(r[9]) || 0
     }));
 
-    // [改修] 名簿データの取得：出席番号と在籍状況も取得する
+    // [改修] 名簿データの取得：出席番号・在籍状況・本人メール（任意）も取得する
     const rosterData = fetchSheetData(ss, DB_SCHEMA.StudentRoster.name).map(r => ({
-      classId: String(r[1]), 
-      name: String(r[3]), 
+      classId: String(r[1]),
+      name: String(r[3]),
       number: r[2] !== "" ? Number(r[2]) : 999, // 出席番号（空なら末尾へ）
-      isActive: (r[4] === true || r[4] === "TRUE" || r[4] === "") // 在籍状況（空ならTrue扱い）
+      isActive: (r[4] === true || r[4] === "TRUE" || r[4] === ""), // 在籍状況（空ならTrue扱い）
+      studentId: String(r[6] || "") // 本人メール（任意・あれば記録と正確に結びつく）
     })).filter(r => r.name);
 
+    // ==== 以下の集計はすべて studentKey（本人メール優先・無ければ name: 表示名）でまとめる ====
     // 学習ログを集計（最新ステータスのみ）
     const clsProgress = {};
     fetchSheetData(ss, DB_SCHEMA.LearningLogs.name).forEach(r => {
-      const name = String(r[2]); const taskId = String(r[3]); const status = String(r[4]); const reflection = String(r[5] || "");
-      if (!clsProgress[name]) clsProgress[name] = {};
-      if (!clsProgress[name][taskId]) clsProgress[name][taskId] = { status: '', reflection: '' };
-      if (status && status !== 'メモ') clsProgress[name][taskId].status = status;
-      if (reflection) clsProgress[name][taskId].reflection = reflection;
+      const key = studentKey(r[1], r[2]); const taskId = String(r[3]); const status = String(r[4]); const reflection = String(r[5] || "");
+      if (!clsProgress[key]) clsProgress[key] = {};
+      if (!clsProgress[key][taskId]) clsProgress[key][taskId] = { status: '', reflection: '' };
+      if (status && status !== 'メモ') clsProgress[key][taskId].status = status;
+      if (reflection) clsProgress[key][taskId].reflection = reflection;
     });
 
     // その他のデータを取得
     const clsFeedback = {};
     fetchSheetData(ss, DB_SCHEMA.Feedback.name).forEach(r => {
-      const name = String(r[1]); const taskId = String(r[2]); const stamp = String(r[3]);
-      if (!clsFeedback[name]) clsFeedback[name] = {};
-      clsFeedback[name][taskId] = stamp;
+      const key = studentKey(r[6], r[1]); const taskId = String(r[2]); const stamp = String(r[3]);
+      if (!clsFeedback[key]) clsFeedback[key] = {};
+      clsFeedback[key][taskId] = stamp;
     });
 
     const allMyTasks = {};
     fetchSheetData(ss, DB_SCHEMA.MyTasks.name).forEach(r => {
-      const name = String(r[1]);
-      if (!allMyTasks[name]) allMyTasks[name] = [];
-      allMyTasks[name].push({
+      const key = studentKey(r[8], r[1]);
+      if (!allMyTasks[key]) allMyTasks[key] = [];
+      allMyTasks[key].push({
         taskId: String(r[0]), title: String(r[2]), desc: String(r[3]), time: Number(r[4]),
         category: 'マイタスク', type: 'challenge', format: 'student', unitId: String(r[6] || '')
       });
@@ -345,26 +363,26 @@ function getData() {
 
     const clsPlans = {};
     fetchSheetData(ss, DB_SCHEMA.StudentPlans.name).forEach(r => {
-      const name = String(r[0]); const uid = String(r[1]);
-      if (!clsPlans[name]) clsPlans[name] = {};
-      clsPlans[name][uid] = safeJsonParse(r[2]);
+      const key = studentKey(r[5], r[0]); const uid = String(r[1]);
+      if (!clsPlans[key]) clsPlans[key] = {};
+      clsPlans[key][uid] = safeJsonParse(r[2]);
     });
 
     const clsReflections = {};
     fetchSheetData(ss, DB_SCHEMA.DailyReflections.name).forEach(r => {
-      const name = String(r[0]); const uid = String(r[1]); const hour = String(r[2]);
-      if (!clsReflections[name]) clsReflections[name] = {};
-      if (!clsReflections[name][uid]) clsReflections[name][uid] = {};
-      clsReflections[name][uid][hour] = { 
+      const key = studentKey(r[9], r[0]); const uid = String(r[1]); const hour = String(r[2]);
+      if (!clsReflections[key]) clsReflections[key] = {};
+      if (!clsReflections[key][uid]) clsReflections[key][uid] = {};
+      clsReflections[key][uid][hour] = {
         achievement: r[3], comment: r[4], check: r[5], skills: safeJsonParse(r[8])
       };
     });
 
     const clsPortfolios = {};
     fetchSheetData(ss, DB_SCHEMA.Portfolios.name).forEach(r => {
-      const name = String(r[0]); const uid = String(r[1]);
-      if (!clsPortfolios[name]) clsPortfolios[name] = {};
-      clsPortfolios[name][uid] = {
+      const key = studentKey(r[7], r[0]); const uid = String(r[1]);
+      if (!clsPortfolios[key]) clsPortfolios[key] = {};
+      clsPortfolios[key][uid] = {
         summary: String(r[2]), feedback: String(r[5] || ""), stamp: String(r[6] || ""),
         studentId: String(r[7] || "") // 先生フィードバックを本人の行に確実に着地させるための本人メール
       };
@@ -446,6 +464,91 @@ function invalidateLiveSnapshotCache() {
 }
 
 /**
+ * ギャラリーウォーク用の軽量API（クラスの計画とマイタスク）。
+ * 「みんなの計画」はこれまでログイン時のスナップショットを表示し続けており、
+ * 友だちが計画を変えても児童の画面には反映されなかった。
+ * 返す内容は getData が児童にも返している plans / myTasks と同じ範囲
+ * （進捗・ふりかえり等の機微データは含まない）。20秒の共有キャッシュ付き。
+ */
+function getGalleryData() {
+  try {
+    MiraiAuth.requireUser();
+    const ssId = PROPERTIES.getProperty('SS_ID');
+    if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
+
+    const cache = CacheService.getScriptCache();
+    const cacheKey = 'gallery_data_' + ssId;
+    const cached = cache.get(cacheKey);
+    if (cached) return createSuccessResponse({ json: cached });
+
+    const ss = SpreadsheetApp.openById(ssId);
+    // getData と同じ studentKey 規則でまとめる
+    const clsPlans = {};
+    fetchSheetData(ss, DB_SCHEMA.StudentPlans.name).forEach(r => {
+      const key = studentKey(r[5], r[0]); const uid = String(r[1]);
+      if (!clsPlans[key]) clsPlans[key] = {};
+      clsPlans[key][uid] = safeJsonParse(r[2]);
+    });
+
+    const allMyTasks = {};
+    fetchSheetData(ss, DB_SCHEMA.MyTasks.name).forEach(r => {
+      const key = studentKey(r[8], r[1]);
+      if (!allMyTasks[key]) allMyTasks[key] = [];
+      allMyTasks[key].push({
+        taskId: String(r[0]), title: String(r[2]), desc: String(r[3]), time: Number(r[4]),
+        category: 'マイタスク', type: 'challenge', format: 'student', unitId: String(r[6] || '')
+      });
+    });
+
+    const json = JSON.stringify({ plans: clsPlans, myTasks: allMyTasks });
+    try { cache.put(cacheKey, json, 20); } catch (ignore) { /* 100KB超過時は素通し */ }
+    return createSuccessResponse({ json: json });
+  } catch (e) { return createErrorResponse(e); }
+}
+
+/**
+ * 先生向け進捗スナップショットAPI（進捗一覧のライブ更新用）。
+ * getData の clsProgress / clsFeedback と同じ集計を、この2シートだけ読んで返す。
+ * これまで進捗一覧は画面を切り替えるまで更新されず、「授業中の見取り」に
+ * 使えなかった。15秒の共有キャッシュ付きで、複数の先生が同時に開いても
+ * シート読みは15秒に1回に抑えられる。
+ */
+function getProgressSnapshot() {
+  try {
+    MiraiAuth.requireTeacher(); // クラス全員分のデータを返すため教員限定
+    const ssId = PROPERTIES.getProperty('SS_ID');
+    if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
+
+    const cache = CacheService.getScriptCache();
+    const cacheKey = 'progress_snapshot_' + ssId;
+    const cached = cache.get(cacheKey);
+    if (cached) return createSuccessResponse({ json: cached });
+
+    const ss = SpreadsheetApp.openById(ssId);
+    // getData と同じ studentKey 規則でまとめる
+    const clsProgress = {};
+    fetchSheetData(ss, DB_SCHEMA.LearningLogs.name).forEach(r => {
+      const key = studentKey(r[1], r[2]); const taskId = String(r[3]); const status = String(r[4]); const reflection = String(r[5] || "");
+      if (!clsProgress[key]) clsProgress[key] = {};
+      if (!clsProgress[key][taskId]) clsProgress[key][taskId] = { status: '', reflection: '' };
+      if (status && status !== 'メモ') clsProgress[key][taskId].status = status;
+      if (reflection) clsProgress[key][taskId].reflection = reflection;
+    });
+
+    const clsFeedback = {};
+    fetchSheetData(ss, DB_SCHEMA.Feedback.name).forEach(r => {
+      const key = studentKey(r[6], r[1]); const taskId = String(r[2]); const stamp = String(r[3]);
+      if (!clsFeedback[key]) clsFeedback[key] = {};
+      clsFeedback[key][taskId] = stamp;
+    });
+
+    const json = JSON.stringify({ progress: clsProgress, feedback: clsFeedback });
+    try { cache.put(cacheKey, json, 15); } catch (ignore) { /* 100KB超過時は素通し */ }
+    return createSuccessResponse({ json: json });
+  } catch (e) { return createErrorResponse(e); }
+}
+
+/**
  * 児童向け軽量ポーリングAPI。
  * 先生スタンプ（Feedback）と今日以降の時間割（ClassSchedule）だけを返す。
  * getStudentProgress（6シート全読み）を定期実行するのは重すぎるため、
@@ -453,15 +556,17 @@ function invalidateLiveSnapshotCache() {
  */
 function getStudentPulse(studentName) {
   try {
-    MiraiAuth.requireUser();
+    const sid = MiraiAuth.requireUser();
     const ssId = PROPERTIES.getProperty('SS_ID');
     if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
     const ss = SpreadsheetApp.openById(ssId);
 
-    // Feedback は先生が名前指定で書き込む（getStudentProgress と同じ照合ルール）
+    // スタンプの照合ルールは getStudentProgress と同一
+    // （studentId がある行は本人メールでだけ照合、無い行は表示名でフォールバック）
     const fbMap = {};
     fetchSheetData(ss, DB_SCHEMA.Feedback.name).forEach(r => {
-      if (r[1] === studentName) fbMap[String(r[2])] = String(r[3]);
+      const rowSid = String(r[6] || "");
+      if (rowSid ? rowSid === sid : r[1] === studentName) fbMap[String(r[2])] = String(r[3]);
     });
 
     const todayStr = Utilities.formatDate(new Date(), "JST", "yyyy-MM-dd");
@@ -505,11 +610,12 @@ function getStudentProgress(studentName, classId, currentUnitId) {
       }
     });
 
-    // Feedback は先生が名前指定で書き込む（studentId 列は空）。stamp 用に名前で照合する。
-    // ※先生発行スタンプのみ・機微度は低いが、名前ベースのため残留リスクとして報告済み。
+    // スタンプの照合ルール：行に studentId が入っていれば本人メールでだけ照合（同名誤配なし）。
+    // 入っていない行（旧データ・ID不明時）は従来どおり表示名で照合するフォールバック。
     const fbMap = {};
     fetchSheetData(ss, DB_SCHEMA.Feedback.name).forEach(r => {
-      if (r[1] === studentName) fbMap[String(r[2])] = String(r[3]);
+      const rowSid = String(r[6] || "");
+      if (rowSid ? rowSid === sid : r[1] === studentName) fbMap[String(r[2])] = String(r[3]);
     });
 
     const myTasks = [];
@@ -556,9 +662,12 @@ function getStudentProgress(studentName, classId, currentUnitId) {
     }
 
     return createSuccessResponse({
-      json: JSON.stringify({ 
-        progress: map, feedback: fbMap, myTasks: myTasks, 
-        portfolio: portfolioData, plans: plans, reflections: reflections
+      json: JSON.stringify({
+        progress: map, feedback: fbMap, myTasks: myTasks,
+        portfolio: portfolioData, plans: plans, reflections: reflections,
+        // 自分の正準キー。クライアントがクラス集計（studentKey キー）の中から
+        // 自分の分を見分けるのに使う（ギャラリーの自分スキップ・自計画の保持など）。
+        myKey: studentKey(sid, studentName)
       })
     });
   } catch (e) { return createErrorResponse(e); }
@@ -906,13 +1015,13 @@ function saveClassRoster(classId, studentList) {
         if (String(data[i][1]) === classId) { sheet.deleteRow(i + 1); }
       }
       
-      // studentList: [{name: '...', number: 1, isActive: true}, ...]
+      // studentList: [{name: '...', number: 1, isActive: true, studentId: 'xxx@school.jp'(任意)}, ...]
       // 従来の文字列リストにも対応（後方互換性）
       const rows = studentList.map(s => {
         if (typeof s === 'string') {
-          return [Utilities.getUuid(), classId, '', s, true, new Date()];
+          return [Utilities.getUuid(), classId, '', s, true, new Date(), ''];
         } else {
-          return [Utilities.getUuid(), classId, s.number, s.name, s.isActive, new Date()];
+          return [Utilities.getUuid(), classId, s.number, s.name, s.isActive, new Date(), String(s.studentId || '')];
         }
       });
       if (rows.length > 0) {
@@ -931,11 +1040,17 @@ function saveSeatCoordinates(coordinates) {
       const ss = getSpreadsheet();
       const sheet = ss.getSheetByName(DB_SCHEMA.LiveStatus.name);
       const data = sheet.getDataRange().getValues();
+      // 行の特定は studentId（本人メール）優先。同名児童がいても座席が混ざらない。
+      // studentId が無い座標（名簿のみの児童など）は従来どおり表示名で照合する。
+      const sidToRow = new Map();
       const nameToRow = new Map();
-      for (let i = 1; i < data.length; i++) { nameToRow.set(data[i][1], i + 1); }
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][0]) sidToRow.set(String(data[i][0]), i + 1);
+        if (!nameToRow.has(data[i][1])) nameToRow.set(data[i][1], i + 1);
+      }
 
       coordinates.forEach(c => {
-        const rIdx = nameToRow.get(c.name);
+        const rIdx = (c.studentId && sidToRow.get(String(c.studentId))) || nameToRow.get(c.name);
         if (rIdx) { sheet.getRange(rIdx, 9, 1, 2).setValues([[c.x, c.y]]); }
       });
       invalidateLiveSnapshotCache();
@@ -1069,13 +1184,18 @@ function savePortfolio(studentName, unitId, summary, classId) {
 
 // --- フィードバック・評価 ---
 
-function sendFeedback(studentName, taskId, stamp, classId) {
+function sendFeedback(studentName, taskId, stamp, classId, studentId) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
       MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
-      ss.getSheetByName(DB_SCHEMA.Feedback.name).appendRow([Utilities.getUuid(), studentName, taskId, stamp, new Date(), classId || ""]);
+      // studentId（本人メール）が分かる場合は末尾列に残す。
+      // 児童側の読み出しは「studentId があれば studentId でだけ照合」するため、
+      // 同名児童がいてもスタンプが他人に誤配されなくなる（無い行は従来どおり名前照合）。
+      ss.getSheetByName(DB_SCHEMA.Feedback.name).appendRow([
+        Utilities.getUuid(), studentName, taskId, stamp, new Date(), classId || "", String(studentId || "")
+      ]);
       return createSuccessResponse();
     } catch (e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
   } else { return createErrorResponse(new Error("Timeout")); }
