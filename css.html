@@ -857,4 +857,409 @@ input.form-control[readonly][style*="width: 40px"] { min-width: 44px; }
   .summary-table-container, .heatmap-table { width: 100%; }
   .st-col-feedback { width: auto; }
 }
+
+/* =========================================================================
+   13. コンパスクエスト（児童画面のやさしいデザイン一式）  ── prefix: cq-
+   -------------------------------------------------------------------------
+   まなびクエストの手ざわりを、みらいコンパスの児童画面に移植したもの。
+   いちばんやってほしいこと「1つ」を大きく出し、色とアイコンで
+   「どこを押せばいいか」が文字を読まなくても分かるようにする。
+   ゲーム経済（レベル・ポイント・ガチャ）は入れない。演出だけ。
+   ========================================================================= */
+:root {
+  /* -- 色ファミリー（カード・とびら・ボタンの色わけ） -- */
+  --cq-blue:   #1a73e8;  --cq-blue-d:   #0a58ca;  --cq-blue-e:   #0d47a1;  --cq-blue-s:   #eaf3ff;
+  --cq-green:  #2fb673;  --cq-green-d:  #146c43;  --cq-green-e:  #0f5132;  --cq-green-s:  #e6f8ef;
+  --cq-orange: #f5942a;  --cq-orange-d: #b45309;  --cq-orange-e: #92400e;  --cq-orange-s: #fff2e0;
+  --cq-pink:   #ef5f92;  --cq-pink-d:   #b83266;  --cq-pink-e:   #8f244c;  --cq-pink-s:   #ffedf3;
+  --cq-purple: #8b5cf6;  --cq-purple-d: #6d28d9;  --cq-purple-e: #4c1d95;  --cq-purple-s: #f0edff;
+  --cq-cyan:   #0e9bb0;  --cq-cyan-d:   #087990;  --cq-cyan-e:   #075668;  --cq-cyan-s:   #e2f8fb;
+  --cq-gold:   #eab308;  --cq-gold-d:   #b8860b;  --cq-gold-e:   #8a6508;  --cq-gold-s:   #fff6dd;
+
+  /* -- 文字・線・面 -- */
+  --cq-ink:     #2f3d4f;
+  --cq-ink-2:   #5b6b80;
+  --cq-muted:   #5c636a;
+  --cq-line:    #dbe6f3;
+  --cq-surface: #ffffff;
+  --cq-canvas:  #eef4fb;
+
+  /* -- 角丸・影 -- */
+  --cq-radius-lg: 1.25rem;
+  --cq-radius-md: .9rem;
+  --cq-radius-pill: 999px;
+  --cq-shadow:    0 .35rem .9rem rgba(47, 61, 79, .10);
+  --cq-shadow-lg: 0 .8rem 1.6rem rgba(47, 61, 79, .16);
+
+  /* -- カードのアクセント（.cq-accent-* で上書きする） -- */
+  --cq-accent:       linear-gradient(90deg, #5b9df5, #8bc0ff);
+  --cq-accent-color: var(--cq-blue-d);
+  --cq-accent-soft:  var(--cq-blue-s);
+}
+
+/* -- アクセント切りかえ（カード・とびら・見出しの色をファミリーで替える） -- */
+.cq-accent-blue   { --cq-accent: linear-gradient(90deg,#5b9df5,#8bc0ff); --cq-accent-color: var(--cq-blue-d);   --cq-accent-soft: var(--cq-blue-s);   --cq-edge: var(--cq-blue-e); }
+.cq-accent-green  { --cq-accent: linear-gradient(90deg,#35c47e,#8fe6b7); --cq-accent-color: var(--cq-green-d);  --cq-accent-soft: var(--cq-green-s);  --cq-edge: var(--cq-green-e); }
+.cq-accent-orange { --cq-accent: linear-gradient(90deg,#f9a03f,#ffcf8a); --cq-accent-color: var(--cq-orange-d); --cq-accent-soft: var(--cq-orange-s); --cq-edge: var(--cq-orange-e); }
+.cq-accent-pink   { --cq-accent: linear-gradient(90deg,#f472a0,#ffb0cb); --cq-accent-color: var(--cq-pink-d);   --cq-accent-soft: var(--cq-pink-s);   --cq-edge: var(--cq-pink-e); }
+.cq-accent-purple { --cq-accent: linear-gradient(90deg,#9a8bff,#c9c0ff); --cq-accent-color: var(--cq-purple-d); --cq-accent-soft: var(--cq-purple-s); --cq-edge: var(--cq-purple-e); }
+.cq-accent-cyan   { --cq-accent: linear-gradient(90deg,#28c3d6,#93e9f2); --cq-accent-color: var(--cq-cyan-d);   --cq-accent-soft: var(--cq-cyan-s);   --cq-edge: var(--cq-cyan-e); }
+.cq-accent-gold   { --cq-accent: linear-gradient(90deg,#f7c63f,#ffe6a1); --cq-accent-color: var(--cq-gold-d);   --cq-accent-soft: var(--cq-gold-s);   --cq-edge: var(--cq-gold-e); }
+
+/* =========================================================================
+   きょうの あいさつ（ヒーローヘッダー）
+   ========================================================================= */
+.cq-hero {
+  position: relative; overflow: hidden;
+  border-radius: var(--cq-radius-lg);
+  padding: 1.05rem 1.15rem 1.15rem;
+  margin-bottom: 1rem;
+  color: #fff;
+  background: linear-gradient(135deg, #4f8ef7 0%, #7a6bf0 55%, #b163e6 100%);
+  box-shadow: var(--cq-shadow-lg);
+}
+.cq-hero::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(circle at 12% 18%, rgba(255,255,255,.35) 0 3px, transparent 4px),
+    radial-gradient(circle at 78% 12%, rgba(255,255,255,.28) 0 4px, transparent 5px),
+    radial-gradient(circle at 88% 62%, rgba(255,255,255,.22) 0 3px, transparent 4px),
+    radial-gradient(circle at 32% 82%, rgba(255,255,255,.18) 0 2px, transparent 3px);
+}
+.cq-hero > * { position: relative; z-index: 1; }
+.cq-hero .cq-hello { display: flex; align-items: center; gap: .5rem; font-size: 1.35rem; font-weight: 700; line-height: 1.3; }
+.cq-hero .cq-hello .cq-hello-emoji { font-size: 1.6rem; line-height: 1; }
+.cq-hero .cq-hero-unit { font-size: .95rem; opacity: .95; margin-top: .35rem; display: flex; align-items: center; gap: .35rem; }
+.cq-hero .cq-hero-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-top: .7rem; }
+.cq-hero .cq-hour-select {
+  font-family: inherit; font-weight: 700; font-size: 1rem;
+  color: #fff; background: rgba(255,255,255,.22);
+  border: 1.5px solid rgba(255,255,255,.5); border-radius: var(--cq-radius-pill);
+  padding: .35rem 1rem; min-height: 2.6rem;
+}
+.cq-hero .cq-hour-select option { color: var(--cq-ink); }
+.cq-hero .cq-hero-badge {
+  display: inline-flex; align-items: center; gap: .3rem;
+  background: rgba(255,255,255,.22); border-radius: var(--cq-radius-pill);
+  padding: .3rem .8rem; font-size: .88rem; font-weight: 700;
+}
+.cq-hero .cq-hero-badge.sos  { background: #d93a3a; }
+.cq-hero .cq-hero-badge.focus { background: #0e7490; }
+
+/* =========================================================================
+   きょうの やること（大きな1つだけの案内カード）
+   ========================================================================= */
+.cq-today {
+  position: relative; overflow: hidden;
+  display: block; width: 100%; text-align: left;
+  border: 0; border-radius: var(--cq-radius-lg);
+  padding: 1.15rem 1.2rem;
+  margin-bottom: 1rem;
+  font-family: inherit; color: #fff;
+  background: linear-gradient(135deg, #ff9d4d, #f2653f 60%, #e8467a);
+  box-shadow: 0 6px 0 rgba(0,0,0,.12), var(--cq-shadow-lg);
+  transition: transform .1s ease, box-shadow .1s ease;
+}
+.cq-today:not(.done) { cursor: pointer; }
+.cq-today:not(.done):active { transform: translateY(6px); box-shadow: 0 0 0 rgba(0,0,0,.12), var(--cq-shadow); }
+.cq-today.done { background: linear-gradient(135deg, #4fd08a, #22a05f); cursor: default; }
+.cq-today .cq-today-label {
+  display: inline-flex; align-items: center; gap: .3rem;
+  background: rgba(255,255,255,.22); border-radius: var(--cq-radius-pill);
+  padding: .15rem .75rem; font-size: .82rem; font-weight: 700; margin-bottom: .5rem;
+}
+.cq-today .cq-today-title {
+  display: flex; align-items: center; gap: .6rem;
+  font-size: 1.3rem; font-weight: 700; line-height: 1.45;
+}
+.cq-today .cq-today-emoji { font-size: 2.2rem; line-height: 1; flex: 0 0 auto; }
+.cq-today .cq-today-note { display: block; font-size: .92rem; opacity: .95; margin-top: .4rem; }
+/* さそうように、ゆっくり息をするアイコン */
+.cq-today:not(.done) .cq-today-emoji { animation: cq-breathe 2.4s ease-in-out infinite; }
+@keyframes cq-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.14) rotate(-6deg); } }
+/* ときどき光が横切って「ここを押してね」と目をひく */
+.cq-today:not(.done)::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,.35) 50%, transparent 60%);
+  animation: cq-today-shine 4.5s ease-in-out 1.2s infinite;
+}
+@keyframes cq-today-shine {
+  0%, 60%, 100% { transform: translateX(-130%); }
+  80%           { transform: translateX(130%); }
+}
+.cq-today.just-done { animation: cq-today-done .7s cubic-bezier(.25,1.5,.4,1) both; }
+@keyframes cq-today-done {
+  0%   { transform: scale(1) rotate(0); }
+  30%  { transform: scale(1.05) rotate(-1.5deg); }
+  60%  { transform: scale(.99) rotate(1deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+/* =========================================================================
+   きょうの がくしゅう（進捗バー）
+   ========================================================================= */
+.cq-bar-wrap { margin-bottom: 1rem; }
+.cq-bar-label {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: .95rem; font-weight: 700; color: var(--cq-ink-2); margin-bottom: .4rem;
+}
+.cq-bar-label .cq-bar-count { color: var(--cq-green-d); }
+.cq-bar {
+  height: .75rem; border-radius: var(--cq-radius-pill); overflow: hidden;
+  background: var(--cq-line);
+}
+.cq-bar > span {
+  display: block; height: 100%; width: 0; border-radius: var(--cq-radius-pill);
+  background: linear-gradient(90deg, #48cf8c, #8fe6b7);
+  box-shadow: 0 0 .4rem rgba(47,182,115,.5);
+  transition: width .6s cubic-bezier(.2,.85,.3,1);
+  position: relative; overflow: hidden;
+}
+.cq-bar > span::after {
+  content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,.9) 50%, transparent 70%);
+}
+.cq-bar.grew > span::after { animation: cq-bar-shine 1.1s ease-out .35s both; }
+@keyframes cq-bar-shine { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+/* =========================================================================
+   とびら（大きな色わけ1行ボタン）
+   ========================================================================= */
+.cq-door {
+  --door: var(--cq-blue); --door-soft: var(--cq-blue-s);
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; gap: .9rem; width: 100%;
+  text-align: left;
+  padding: .95rem 1.05rem;
+  margin-bottom: .8rem;
+  border: 2px solid var(--door-soft);
+  border-radius: var(--cq-radius-lg);
+  background: linear-gradient(135deg, #fff 40%, var(--door-soft));
+  color: var(--cq-ink);
+  font-family: inherit;
+  box-shadow: 0 5px 0 var(--door-soft), var(--cq-shadow);
+  transition: transform .1s ease, box-shadow .1s ease, border-color .15s;
+}
+.cq-door:hover { border-color: var(--door); color: var(--cq-ink); }
+.cq-door:active { transform: translateY(5px); box-shadow: 0 0 0 var(--door-soft), var(--cq-shadow); }
+.cq-door::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: linear-gradient(105deg, transparent 38%, rgba(255,255,255,.9) 50%, transparent 62%);
+  transform: translateX(-120%);
+}
+.cq-door.tapped::after { animation: cq-sheen .5s ease-out both; }
+@keyframes cq-sheen { from { transform: translateX(-120%); opacity: 1; } to { transform: translateX(120%); opacity: 0; } }
+.cq-door.tapped { animation: cq-door-press .26s cubic-bezier(.3,1.4,.5,1) both; }
+@keyframes cq-door-press {
+  0%   { transform: translateY(0) scale(1); }
+  35%  { transform: translateY(5px) scale(.982); }
+  100% { transform: translateY(0) scale(1); }
+}
+.cq-door .cq-door-icon {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  width: 3.2rem; height: 3.2rem; border-radius: 1rem;
+  background: #fff; box-shadow: inset 0 0 0 2px var(--door-soft);
+  font-size: 1.7rem; color: var(--door); line-height: 1;
+}
+.cq-door .cq-door-body { flex: 1 1 auto; min-width: 0; }
+.cq-door .cq-door-title { display: block; font-size: 1.15rem; font-weight: 700; line-height: 1.4; }
+.cq-door .cq-door-note { display: block; font-size: .82rem; color: var(--cq-muted); }
+.cq-door .cq-door-arrow { flex: 0 0 auto; font-size: 1rem; color: var(--door); opacity: .75; transition: transform .18s ease; }
+.cq-door:hover .cq-door-arrow { transform: translateX(3px); }
+.cq-door.tapped .cq-door-arrow { animation: cq-arrow-go .45s ease-out both; }
+@keyframes cq-arrow-go {
+  0% { transform: translateX(0); opacity: .7; }
+  45% { transform: translateX(14px); opacity: 0; }
+  46% { transform: translateX(-10px); opacity: 0; }
+  100% { transform: translateX(0); opacity: .7; }
+}
+.cq-door.door-blue   { --door: var(--cq-blue);   --door-soft: var(--cq-blue-s); }
+.cq-door.door-green  { --door: var(--cq-green);  --door-soft: var(--cq-green-s); }
+.cq-door.door-orange { --door: var(--cq-orange); --door-soft: var(--cq-orange-s); }
+.cq-door.door-pink   { --door: var(--cq-pink);   --door-soft: var(--cq-pink-s); }
+.cq-door.door-purple { --door: var(--cq-purple); --door-soft: var(--cq-purple-s); }
+.cq-door.door-cyan   { --door: var(--cq-cyan);   --door-soft: var(--cq-cyan-s); }
+.cq-door.door-gold   { --door: var(--cq-gold);   --door-soft: var(--cq-gold-s); }
+.cq-doors { margin-bottom: 1rem; }
+@media (min-width: 576px) {
+  .cq-doors { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0 .8rem; }
+  .cq-doors .cq-door { margin-bottom: .8rem; }
+}
+
+/* =========================================================================
+   共通カード（.cq-card）── 上に色帯、左に大きなアイコンチップ
+   ========================================================================= */
+.cq-card {
+  position: relative;
+  background: var(--cq-surface);
+  border: 0; border-radius: var(--cq-radius-lg);
+  box-shadow: var(--cq-shadow);
+  overflow: hidden;
+  margin-bottom: .85rem;
+}
+.cq-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+  background: var(--cq-accent);
+}
+.cq-card-head {
+  display: flex; align-items: center; gap: .7rem;
+  padding: 1rem 1rem .4rem;
+}
+.cq-card-icon {
+  flex: 0 0 auto;
+  width: 2.8rem; height: 2.8rem;
+  border-radius: var(--cq-radius-md);
+  display: flex; align-items: center; justify-content: center;
+  line-height: 1; font-size: 1.5rem;
+  color: var(--cq-accent-color);
+  background: var(--cq-accent-soft);
+}
+.cq-card-head-body { flex: 1 1 auto; min-width: 0; }
+.cq-card-title {
+  margin: 0; font-size: 1.1rem; font-weight: 700; line-height: 1.35;
+  color: var(--cq-ink);
+}
+.cq-card-note { font-size: .8rem; color: var(--cq-muted); }
+.cq-card-body { padding: .35rem 1rem 1rem; }
+.cq-card.done { opacity: .96; }
+.cq-card.locked { filter: grayscale(.4); }
+
+/* 見出し（場面を区切る） */
+.cq-section-title {
+  display: flex; align-items: center; gap: .5rem;
+  font-size: 1.02rem; font-weight: 700; color: var(--cq-ink-2);
+  margin: 1.3rem 0 .6rem;
+}
+.cq-section-title .cq-section-emoji { font-size: 1.2rem; }
+.cq-section-title::after {
+  content: ''; flex: 1 1 auto; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--cq-line), transparent);
+}
+
+/* =========================================================================
+   立体ボタン（押し下がる）／ タグ
+   ========================================================================= */
+.cq-btn {
+  --btn-bg: linear-gradient(180deg, #5da2f7, #3a78d8);
+  --btn-edge: #2a5fae;
+  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+  border: 0; border-radius: var(--cq-radius-pill);
+  padding: .6rem 1.3rem;
+  min-height: 3rem;
+  font-family: inherit; font-weight: 700; font-size: 1rem;
+  color: #fff; background: var(--btn-bg);
+  box-shadow: 0 4px 0 var(--btn-edge), 0 6px 12px rgba(47,61,79,.18);
+  transition: transform .08s ease, box-shadow .08s ease, filter .15s ease;
+  cursor: pointer;
+}
+.cq-btn:hover { filter: brightness(1.05); color: #fff; }
+.cq-btn:active { transform: translateY(4px); box-shadow: 0 0 0 var(--btn-edge), 0 2px 5px rgba(47,61,79,.18); }
+.cq-btn:disabled { filter: grayscale(.55) opacity(.65); box-shadow: 0 4px 0 #b8c3cf; cursor: default; }
+.cq-btn-lg { font-size: 1.15rem; padding: .85rem 1.8rem; min-height: 3.3rem; }
+.cq-btn-block { display: flex; width: 100%; }
+.cq-btn-green  { --btn-bg: linear-gradient(180deg,#48cf8c,#1f9d5b); --btn-edge:#146c43; }
+.cq-btn-orange { --btn-bg: linear-gradient(180deg,#ffb054,#e07d0c); --btn-edge:#92400e; }
+.cq-btn-pink   { --btn-bg: linear-gradient(180deg,#ff7fae,#e94b83); --btn-edge:#8f244c; }
+.cq-btn-purple { --btn-bg: linear-gradient(180deg,#a294ff,#7a66ee); --btn-edge:#4c1d95; }
+.cq-btn-gold   { --btn-bg: linear-gradient(180deg,#ffd257,#d9a406); --btn-edge:#8a6508; color:#5a4100; }
+.cq-btn-ghost  { --btn-bg: #fff; --btn-edge:#cdd9e6; color: var(--cq-ink-2); box-shadow: 0 3px 0 var(--btn-edge); border: 2px solid #e3ecf6; }
+.cq-btn-ghost:hover { color: var(--cq-ink-2); }
+.cq-tag {
+  display: inline-flex; align-items: center; gap: .25rem;
+  border-radius: var(--cq-radius-pill); padding: .12rem .6rem;
+  font-size: .72rem; font-weight: 700;
+  color: var(--cq-accent-color); background: var(--cq-accent-soft);
+}
+
+/* =========================================================================
+   リストのふわっと出現（.cq-stagger を親に付ける）
+   ========================================================================= */
+.cq-stagger > * { animation: cq-rise .34s cubic-bezier(.2,.85,.3,1) both; }
+.cq-stagger > *:nth-child(1) { animation-delay: .03s; }
+.cq-stagger > *:nth-child(2) { animation-delay: .08s; }
+.cq-stagger > *:nth-child(3) { animation-delay: .13s; }
+.cq-stagger > *:nth-child(4) { animation-delay: .18s; }
+.cq-stagger > *:nth-child(5) { animation-delay: .23s; }
+.cq-stagger > *:nth-child(n+6) { animation-delay: .28s; }
+@keyframes cq-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+/* ビューの入れかわり（renderStudentView のたびに付ける） */
+.cq-view-in { animation: cq-view-slide .28s cubic-bezier(.2,.85,.3,1) both; }
+@keyframes cq-view-slide { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* タブを押したしゅんかん、絵が「ぴょん」とはねる */
+.cq-tab-pop { animation: cq-tab-pop .45s cubic-bezier(.25,1.6,.45,1) both; }
+@keyframes cq-tab-pop {
+  0%   { transform: scale(1) translateY(0); }
+  40%  { transform: scale(1.3) translateY(-5px); }
+  70%  { transform: scale(1.02) translateY(1px); }
+  100% { transform: scale(1) translateY(0); }
+}
+
+/* 読み込み中のぴょんぴょん */
+.cq-loading-dots { display: flex; justify-content: center; gap: .6rem; padding: 2rem 0; }
+.cq-loading-dots i {
+  width: 1rem; height: 1rem; border-radius: 50%;
+  animation: cq-bounce-dot 1s ease-in-out infinite;
+}
+.cq-loading-dots i:nth-child(1) { background: var(--cq-blue);   animation-delay: 0s; }
+.cq-loading-dots i:nth-child(2) { background: var(--cq-orange); animation-delay: .14s; }
+.cq-loading-dots i:nth-child(3) { background: var(--cq-green);  animation-delay: .28s; }
+@keyframes cq-bounce-dot {
+  0%, 100% { transform: translateY(0) scale(1); }
+  35%      { transform: translateY(-.9rem) scale(1.12); }
+}
+
+/* =========================================================================
+   うれしい演出（お祝い）── ライブラリなしの紙ふぶき・ぷるっ・はじけ
+   ========================================================================= */
+.cq-confetti { position: fixed; inset: 0; z-index: 2200; pointer-events: none; overflow: hidden; }
+.cq-confetti i {
+  position: absolute; top: -6vh;
+  width: 10px; height: 16px; border-radius: 2px;
+  animation: cq-fall linear forwards;
+}
+@keyframes cq-fall {
+  0%   { transform: translate3d(0, -10vh, 0) rotate(0deg); opacity: 1; }
+  100% { transform: translate3d(var(--dx, 0px), 105vh, 0) rotate(var(--rot, 540deg)); opacity: .9; }
+}
+.cq-confetti i.star {
+  width: 14px; height: 14px; border-radius: 0;
+  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+}
+.cq-pop { animation: cq-pop .45s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes cq-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+.cq-burst { position: fixed; z-index: 2250; pointer-events: none; }
+.cq-burst i {
+  position: absolute; left: 0; top: 0;
+  width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+  animation: cq-burst-fly .75s cubic-bezier(.15,.75,.35,1) both;
+}
+@keyframes cq-burst-fly {
+  0%   { transform: translate(0, 0) scale(.4) rotate(0); opacity: 1; }
+  100% { transform: translate(var(--bx), var(--by)) scale(1.1) rotate(180deg); opacity: 0; }
+}
+
+/* 児童画面のダイアログを、ぽよんと出す */
+body.cq-student .swal2-popup.swal2-show { animation: cq-swal-in .4s cubic-bezier(.25,1.5,.45,1) both; }
+@keyframes cq-swal-in {
+  from { transform: scale(.8) translateY(18px); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+
+/* 動きを減らす設定の端末では、演出をおさえる（お祝いレイヤーは出さない）。
+   ★ ここには animation-duration の .01ms リテラルは書かない。上の共通ブロックが
+     全体を .01ms に落としているので、ここでは「消す・止める」だけにする。 */
+@media (prefers-reduced-motion: reduce) {
+  .cq-confetti, .cq-burst { display: none !important; }
+  .cq-today:not(.done) .cq-today-emoji,
+  .cq-today:not(.done)::before,
+  .cq-loading-dots i { animation: none !important; }
+}
 </style>
