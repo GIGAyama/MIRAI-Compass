@@ -51,21 +51,30 @@ function runTeacher(fnName, args, onSuccess, onFailure) {
 // ==========================================
 
 /**
- * [モーダル] AI設定（Geminiキー・先生名）
- * getAiConfig() で現在の設定状態を読み、saveAiConfig(key,name) で保存する。
+ * [モーダル] AI設定（Geminiキー・使用モデル・先生名）
+ * getAiConfig() で現在の設定状態を読み、saveAiConfig(key,name,model) で保存する。
  * キーは空欄なら変更なし（サーバー側で既存を保持）。
+ * モデル一覧は getAvailableGeminiModels() で取得し、取得できないときは現在値のみのプルダウンにする。
  */
 function openAiSettings() {
   runTeacher('getAiConfig', [], function(cfg) {
     cfg = cfg || {};
+    var currentModel = cfg.modelName || 'gemini-2.5-flash';
     Swal.fire({
-      title: 'AI設定（Geminiキー）',
+      title: 'AI設定（Gemini）',
       html:
         '<div class="text-start">'
         + '  <div class="mb-3">'
         + '    <label class="form-label small fw-bold">Gemini APIキー</label>'
         + '    <input type="password" id="ai-key" class="form-control" autocomplete="off" placeholder="変更するときだけ入力">'
         + '    <div class="form-text small">現在: ' + (cfg.hasApiKey ? '<span class="text-success fw-bold">設定済み</span>' : '<span class="text-danger">未設定</span>') + ' ／ 空欄のまま保存すると変更されません。</div>'
+        + '  </div>'
+        + '  <div class="mb-3">'
+        + '    <label class="form-label small fw-bold">使用する AI モデル</label>'
+        + '    <select id="ai-model" class="form-select">'
+        + '      <option value="' + escapeHtml(currentModel) + '">' + escapeHtml(currentModel) + '</option>'
+        + '    </select>'
+        + '    <div class="form-text small" id="ai-model-note">ワークシート生成などの AI 機能で使用します。</div>'
         + '  </div>'
         + '  <div class="mb-1">'
         + '    <label class="form-label small fw-bold">先生の名前</label>'
@@ -75,15 +84,46 @@ function openAiSettings() {
       showCancelButton: true,
       confirmButtonText: '保存',
       cancelButtonText: '閉じる',
+      didOpen: function() {
+        // モデル一覧を取得してプルダウンに反映（失敗時は現在値のみのまま使える）
+        runTeacher('getAvailableGeminiModels', [], function(res) {
+          var sel = document.getElementById('ai-model');
+          var note = document.getElementById('ai-model-note');
+          if (!sel) return;
+          if (!res || !res.success || !res.models || !res.models.length) {
+            if (note && res && res.error) note.textContent = 'モデル一覧を取得できませんでした: ' + res.error;
+            return;
+          }
+          sel.innerHTML = '';
+          var found = false;
+          res.models.forEach(function(m) {
+            var opt = document.createElement('option');
+            opt.value = m.name;
+            opt.textContent = m.name + (m.displayName && m.displayName !== m.name ? '（' + m.displayName + '）' : '');
+            if (m.name === currentModel) found = true;
+            sel.appendChild(opt);
+          });
+          if (!found) {
+            // 保存済みモデルが一覧に無い（廃止等）場合も選択を失わないよう先頭に残す
+            var cur = document.createElement('option');
+            cur.value = currentModel;
+            cur.textContent = currentModel + '（一覧に無いモデル）';
+            sel.insertBefore(cur, sel.firstChild);
+            if (note) note.textContent = '現在のモデルは利用可能な一覧に含まれていません。別のモデルの選択をおすすめします。';
+          }
+          sel.value = currentModel;
+        }, function() { /* 取得失敗時は現在値のみのプルダウンのまま */ });
+      },
       preConfirm: function() {
         return {
           key: (document.getElementById('ai-key') || {}).value || '',
-          name: (document.getElementById('ai-name') || {}).value || ''
+          name: (document.getElementById('ai-name') || {}).value || '',
+          model: (document.getElementById('ai-model') || {}).value || ''
         };
       }
     }).then(function(r) {
       if (!r.isConfirmed) return;
-      runTeacher('saveAiConfig', [r.value.key, r.value.name], function() {
+      runTeacher('saveAiConfig', [r.value.key, r.value.name, r.value.model], function() {
         showToast('success', 'AI設定を保存しました');
       });
     });

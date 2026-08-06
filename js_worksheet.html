@@ -1087,15 +1087,32 @@ var Worksheet = (function () {
         UI.toast('AI がワークシートを作成しました');
       });
     }).catch(function () {
-      Swal.fire('生成エラー', 'AI による生成に失敗しました。AI設定（Geminiキー）を確認してください。', 'error');
+      Swal.fire('生成エラー', 'AI による生成に失敗しました。AI設定（Geminiキー・モデル）を確認してください。', 'error');
     }).finally(function () { UI.hideLoading(); });
   }
 
   // 手動 AI（コピペ）：プロンプトをコピー → 外部 AI → 出力 HTML を貼り付け保存
+  // プロンプトはサーバーの buildWorksheetPrompt から取得し、自動生成と常に同一内容にする。
   function openManualAiModal() {
     if (!State.currentTask) return Swal.fire('エラー', '課題が選択されていません。', 'warning');
     var info = State.unitData ? State.unitData.unitInfo : {};
-    var wsPrompt = buildWsPrompt();
+    UI.showLoading();
+    Server.callTeacher('getWorksheetPromptForManualAI', {
+      grade: info.grade || '',
+      unitName: info.unitName || '',
+      stepTitle: State.currentTask.title,
+      description: State.currentTask.description || '',
+      ocrContext: ''
+    }).then(function (wsPrompt) {
+      UI.hideLoading();
+      showManualAiModal(info, wsPrompt);
+    }).catch(function () {
+      UI.hideLoading();
+      Swal.fire('エラー', 'プロンプトの取得に失敗しました。', 'error');
+    });
+  }
+
+  function showManualAiModal(info, wsPrompt) {
     Swal.fire({
       title: '<i class="bi bi-clipboard-plus me-2"></i>手動AI ワークシート作成',
       html:
@@ -1146,55 +1163,6 @@ var Worksheet = (function () {
       }).finally(function () { UI.hideLoading(); });
     });
   }
-
-  // 手動 AI 用のプロンプト（サーバーの buildWorksheetPrompt と同等）
-  function buildWsPrompt() {
-    var info = State.unitData ? State.unitData.unitInfo : { grade: '', unitName: '' };
-    var grade = info.grade || '';
-    var unitName = info.unitName || '';
-    var title = State.currentTask.title || '';
-    var description = State.currentTask.description || '';
-    return 'あなたは「教育工学」と「クリエイティブ・コーディング」に精通したフルスタックエンジニアです。\n'
-      + '日本の小学校の授業で使う、高品質なワークシートのHTMLを生成してください。\n\n'
-      + '【授業情報】\n'
-      + '学年: ' + grade + '\n'
-      + '単元名: ' + unitName + '\n'
-      + '授業タイトル: ' + title + '\n'
-      + '活動内容: ' + description + '\n\n'
-      + '【出力形式の制約（厳守）】\n'
-      + '- HTMLの body 内部のみを出力すること。<!DOCTYPE>, <html>, <head>, <body> タグは不要。\n'
-      + '- Markdown記法は禁止。```html ブロックで囲まないこと。\n'
-      + '- 外部リソース（img src="https://...", CDN, 外部ライブラリ）は一切使用禁止。\n'
-      + '- すべて標準API（HTML, CSS, インラインSVG, JavaScript）のみで完結させること。\n\n'
-      + '【HTMLレイアウト構造（この構造を厳守すること）】\n'
-      + '<div class="ws-sheet">\n'
-      + '  <div class="ws-header-fixed"><div class="ws-header-left">\n'
-      + '    <span class="ws-unit-name">' + grade + ' ' + unitName + '</span>\n'
-      + '    <h1 class="ws-title">' + title + '</h1></div>\n'
-      + '    <table class="ws-meta-table"><tr>'
-      + '<td class="ws-meta-label">年</td><td class="ws-meta-input"></td>'
-      + '<td class="ws-meta-label">組</td><td class="ws-meta-input"></td>'
-      + '<td class="ws-meta-label">名前</td><td class="ws-meta-input" style="min-width:120px;"></td></tr></table>\n'
-      + '  </div>\n'
-      + '  <div class="ws-content"><!-- めあて・ヒント・問題・解答欄 --></div>\n'
-      + '  <div class="ws-footer-fixed"><div class="ws-assessment-grid">\n'
-      + '    <div class="ws-reflection-box"><span class="ws-reflection-title">ふりかえり</span>'
-      + '<div class="ws-box ws-lines" style="height:4.5em;"></div></div>\n'
-      + '    <div><table class="table table-bordered table-sm mb-0" style="font-size:.85em;text-align:center;">'
-      + '<tr><td class="bg-light">わかった</td><td>'
-      + '<button type="button" class="eval-btn" data-value="△">△</button>'
-      + '<button type="button" class="eval-btn" data-value="◯">◯</button>'
-      + '<button type="button" class="eval-btn" data-value="◎">◎</button></td></tr></table></div>\n'
-      + '  </div></div>\n'
-      + '</div>\n\n'
-      + '【ws-content 内に含めるセクション】\n'
-      + '1. 今日のめあて（背景 #e3f2fd, 左ボーダー #2196f3）。\n'
-      + '2. AIコーチのヒント（背景 #fff3e0, 左ボーダー #ff9800）。\n'
-      + '3. 学習課題・問題。\n'
-      + '4. 記述欄には class="ws-box"、罫線付きは class="ws-box ws-lines"。\n\n'
-      + '【美学】小学生が親しみやすい、余白と色の調和したデザインにしてください。';
-  }
-
 
   /* ==========================================================
    *  9. ルーブリック（評価基準）

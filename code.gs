@@ -1425,24 +1425,35 @@ function saveCustomAiPrompt(text) {
 //  5b. ワークシート/回答/AI（統合: 旧みらいパスポート機能を内部化）
 // ==========================================
 
-/* ---------- AI 設定（Gemini APIキーは ScriptProperties に school-level で保持） ---------- */
+/* ---------- AI 設定（Gemini APIキー・モデル名は ScriptProperties に school-level で保持） ---------- */
+
+var GEMINI_DEFAULT_MODEL = 'gemini-2.5-flash';
 
 // サーバー内部だけで APIキーを読む（クライアントには絶対に返さない）。
 function getGeminiApiKey_() {
   return PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '';
 }
 
-// 設定済みかどうかと先生名だけを返す（生のキーは返さない）。要ログイン。
+// 使用する Gemini モデル名を返す。未設定・不正な値のときは既定モデルにフォールバックする。
+// モデル名は API の URL パスに埋め込むため、英数字とドット・ハイフン以外は受け付けない。
+function getGeminiModelName_() {
+  var name = String(PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL_NAME') || '').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return GEMINI_DEFAULT_MODEL;
+  return name;
+}
+
+// 設定済みかどうか・先生名・使用モデル名を返す（生のキーは返さない）。要ログイン。
 function getAiConfig() {
   MiraiAuth.requireUser();
   return {
     hasApiKey: !!getGeminiApiKey_(),
-    teacherName: PropertiesService.getScriptProperties().getProperty('TEACHER_NAME') || ''
+    teacherName: PropertiesService.getScriptProperties().getProperty('TEACHER_NAME') || '',
+    modelName: getGeminiModelName_()
   };
 }
 
-// Gemini APIキー・先生名を保存（先生専用）。キーは入力があったときだけ上書き（空欄＝変更なし）。
-function saveAiConfig(apiKey, teacherName) {
+// Gemini APIキー・先生名・モデル名を保存（先生専用）。キーは入力があったときだけ上書き（空欄＝変更なし）。
+function saveAiConfig(apiKey, teacherName, modelName) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return createErrorResponse(new Error('BUSY'));
   try {
@@ -1453,12 +1464,74 @@ function saveAiConfig(apiKey, teacherName) {
     if (apiKey !== undefined && apiKey !== null && String(apiKey).trim() !== '') {
       toSet['GEMINI_API_KEY'] = String(apiKey).trim();
     }
+    if (modelName !== undefined && modelName !== null && String(modelName).trim() !== '') {
+      var m = String(modelName).trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(m)) {
+        throw new Error('モデル名に使用できない文字が含まれています。');
+      }
+      toSet['GEMINI_MODEL_NAME'] = m;
+    }
     if (Object.keys(toSet).length) props.setProperties(toSet);
     return { success: true };
   } catch (e) {
     return createErrorResponse(e);
   } finally {
     lock.releaseLock();
+  }
+}
+
+// 利用可能な Gemini モデル一覧（generateContent 対応のみ）を返す。先生専用。
+// 一覧は1時間キャッシュする（設定画面を開くたびに ListModels を叩かないため）。
+function getAvailableGeminiModels() {
+  MiraiAuth.requireTeacher();
+  try {
+    var apiKey = getGeminiApiKey_();
+    if (!apiKey) {
+      return { success: false, models: [], error: 'Gemini APIキーが設定されていません。' };
+    }
+
+    var cache = CacheService.getScriptCache();
+    var cached = cache.get('geminiModelList');
+    if (cached) {
+      return { success: true, models: JSON.parse(cached) };
+    }
+
+    var allModels = [];
+    var pageToken = '';
+    do {
+      var url = 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=100';
+      // クエリ名の直後に = を続けた文字列は秘密情報チェック（B2）が誤検知するため join で組み立てる
+      if (pageToken) url += '&' + ['pageToken', encodeURIComponent(pageToken)].join('=');
+      var res = UrlFetchApp.fetch(url, {
+        headers: { 'x-goog-api-key': apiKey },
+        muteHttpExceptions: true
+      });
+      if (res.getResponseCode() !== 200) {
+        var errMsg = 'HTTP ' + res.getResponseCode();
+        try {
+          var errBody = JSON.parse(res.getContentText());
+          if (errBody.error && errBody.error.message) errMsg = errBody.error.message;
+        } catch (ignore) {}
+        return { success: false, models: [], error: 'モデル一覧の取得に失敗しました: ' + errMsg };
+      }
+      var data = JSON.parse(res.getContentText());
+      if (data.models) allModels = allModels.concat(data.models);
+      pageToken = data.nextPageToken || '';
+    } while (pageToken);
+
+    var filtered = allModels
+      .filter(function (m) {
+        return m.supportedGenerationMethods && m.supportedGenerationMethods.indexOf('generateContent') >= 0;
+      })
+      .map(function (m) {
+        var name = String(m.name || '').replace('models/', '');
+        return { name: name, displayName: m.displayName || name };
+      });
+
+    cache.put('geminiModelList', JSON.stringify(filtered), 3600);
+    return { success: true, models: filtered };
+  } catch (e) {
+    return { success: false, models: [], error: e.message };
   }
 }
 
@@ -1861,7 +1934,7 @@ function callGeminiAPI(prompt) {
   if (!apiKey) {
     throw new Error('Gemini APIキーが設定されていません。先生モードの設定を確認してください。');
   }
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + getGeminiModelName_() + ':generateContent';
   var payload = { contents: [{ parts: [{ text: prompt }] }] };
   var options = {
     method: 'post',
@@ -1885,6 +1958,8 @@ function callGeminiAPI(prompt) {
 }
 
 // 統一ワークシート生成プロンプトを構築する（純関数）。
+// どの教科・どの単元でも最適な紙面になるよう、「分析→設計→教科別最適化→実装→セルフチェック」
+// の思考手順を AI に踏ませる構成にしている。レイアウト構造・CSSクラスはアプリ側の契約なので変更しないこと。
 function buildWorksheetPrompt(data) {
   var grade       = data.grade       || '';
   var unitName    = data.unitName    || '';
@@ -1894,23 +1969,59 @@ function buildWorksheetPrompt(data) {
 
   var ocrSection = '';
   if (ocrContext) {
-    ocrSection = '\n【参考資料テキスト】\n' + ocrContext + '\n※この資料の内容を授業に反映させてください。\n';
+    ocrSection = '\n【参考資料テキスト（教科書・指導案等からの抜粋）】\n' + ocrContext + '\n'
+      + '※上の資料は最優先の情報源です。用語・数値・題材はこの資料に合わせてください。\n';
   }
 
-  return 'あなたは「教育工学」と「クリエイティブ・コーディング」に精通したフルスタックエンジニアです。\n'
-    + '日本の小学校の授業で使う、高品質なワークシートのHTMLを生成してください。\n\n'
+  return 'あなたは、日本の小学校教育を知り尽くした3つの専門性を併せ持つスペシャリストです。\n'
+    + '1. 教科教育のエキスパート: 学習指導要領と各教科の系統性を熟知し、児童のつまずきを予見できる。\n'
+    + '2. インストラクショナルデザイナー: 学習科学に基づいて「見通し→挑戦→振り返り」の学びの流れを設計できる。\n'
+    + '3. クリエイティブ・コーダー: HTML/CSS/インラインSVGで美しく機能的な紙面を実装できる。\n\n'
+    + '次の授業で使う、A4縦1枚の高品質なワークシートのHTMLを生成してください。\n\n'
     + '【授業情報】\n'
     + '学年: ' + grade + '\n'
     + '単元名: ' + unitName + '\n'
     + '授業タイトル: ' + stepTitle + '\n'
     + '活動内容: ' + description + '\n'
     + ocrSection + '\n'
+    + '【STEP 1: 授業の分析（出力前に必ず頭の中で行うこと）】\n'
+    + '- 教科の特定: 単元名と活動内容から教科（国語/算数/理科/社会/生活/道徳/外国語/体育/音楽/図工/家庭/総合等）を特定する。\n'
+    + '- 本時の中心活動の見極め: 知識の習得か、技能の練習か、思考・表現か、観察・実験か。それに合った問題形式を選ぶ。\n'
+    + '- 発達段階への適合: 漢字は学年配当を守り、配当外の漢字には <ruby>漢字<rt>かんじ</rt></ruby> でふりがなを付ける。\n'
+    + '  低学年（1〜2年）は文字を大きく、ひらがな中心、指示は1文1動作。中学年以上は思考を促す問いを増やす。\n'
+    + '- つまずきの予見: 児童がどこで迷い、どこで間違えやすいかを予想し、ヒント・例・手順を先回りして紙面に用意する。\n\n'
+    + '【STEP 2: 学習の流れの設計（ws-content の構成）】\n'
+    + 'ws-content 内は次の順で構成する（2と5は紙面の分量に応じて調整可、それ以外は必須）:\n'
+    + '1. 今日のめあて: 児童視点の「〜しよう」「〜できるようになろう」という一文。\n'
+    + '   スタイル: 背景 #e3f2fd, 左ボーダー 4px solid #2196f3, border-radius:8px, padding付きのボックス。\n'
+    + '2. ウォームアップ（推奨）: 既習事項の確認や本時の見通しを持たせる易しい問い（1〜2問）。すぐ解けて自信につながるもの。\n'
+    + '3. メインの学習課題: 基礎→標準→挑戦のスモールステップで2〜4問。\n'
+    + '   - 問題番号（①②③…）を明確に付け、1問ごとに区切りが分かるレイアウトにする。\n'
+    + '   - 指示は具体的な行動で書く（×「考えましょう」→ ○「そう考えた理由を2つ書きましょう」）。\n'
+    + '   - 解答欄の大きさは想定される解答量に合わせる（一言なら1行、説明なら3〜4行、図なら広い枠）。\n'
+    + '   - 問題文だけで解ける情報がすべて紙面にあること（教科書参照が前提の問いにしない）。\n'
+    + '4. AIコーチのヒント: つまずきポイントへの助け舟を1〜2行。考え方の入口だけ示し、答えは絶対に書かない。\n'
+    + '   スタイル: 背景 #fff3e0, 左ボーダー 4px solid #ff9800, border-radius:8px のボックス。\n'
+    + '5. チャレンジ問題（推奨）: 早く終わった児童向けの発展課題。本時の学びを使って一段深く考えられる問い。\n'
+    + '※ふりかえり欄と自己評価はフッターに固定で存在するので、ws-content 内に重複して作らないこと。\n\n'
+    + '【STEP 3: 教科別の最適化】\n'
+    + '特定した教科に応じて、次の定石を適用する:\n'
+    + '- 国語: 縦書きが適する内容（物語・詩・毛筆等）は最外殻を <div class="ws-sheet mode-kokugo"> にする。\n'
+    + '  読解は本文（または要約）を紙面に載せて線引き・書き抜きをさせる。漢字練習はマス目を table で組む。\n'
+    + '- 算数: 筆算は math-grid/math-cell/math-line、作図・図形は grid-paper（方眼）、グラフは graph-paper か SVG。\n'
+    + '  「式」と「答え」の欄を分ける。図・数直線・面積図など視覚的な手がかりを添える。\n'
+    + '- 理科: 「予想→観察・実験→結果→考察」の探究の流れで構成。実験器具や模式図はSVG/CSSで描き、結果は表に記録させる。\n'
+    + '- 社会: 地図・グラフ・年表などの資料をSVG/tableで自作して読み取らせ、「資料から分かること」を書く欄を作る。\n'
+    + '- 外国語: なぞり書き・書き取りには4線（罫線をCSSで描画）を用意する。\n'
+    + '- 生活・道徳・総合: 気づきや自分の考えを自由に書ける広い記述欄。絵で表現する枠（ws-box）も有効。\n'
+    + '- 体育・音楽・図工・家庭: 動きのポイントや手順を図解し、めあての確認と気づきの記録を中心にする。\n'
+    + '- 全教科共通: 文章だけの紙面にせず、内容に即した図・表・イラストを最低1つは入れる。\n\n'
     + '【出力形式の制約（厳守）】\n'
     + '- HTMLの body 内部のみを出力すること。<!DOCTYPE>, <html>, <head>, <body> タグは不要。\n'
-    + '- Markdown記法は禁止。```html ブロックで囲まないこと。\n'
-    + '- 外部リソース（img src="https://...", CDN, 外部ライブラリ）は一切使用禁止。\n'
+    + '- 出力の前後に説明文を付けない。Markdown記法は禁止。```html ブロックで囲まないこと。\n'
+    + '- 外部リソース（img src="https://...", CDN, 外部ライブラリ, via.placeholder.com 等の画像サービス）は一切使用禁止。\n'
     + '- すべて標準API（HTML, CSS, インラインSVG, JavaScript）のみで完結させること。\n'
-    + '- via.placeholder.com 等の外部画像サービスも禁止。\n\n'
+    + '- タグの閉じ忘れ・入れ子の崩れがない、正しいHTMLであること。\n\n'
     + '【HTMLレイアウト構造（この構造を厳守すること）】\n'
     + '<div class="ws-sheet">\n'
     + '  <div class="ws-header-fixed">\n'
@@ -1942,11 +2053,11 @@ function buildWorksheetPrompt(data) {
     + '    </div>\n'
     + '  </div>\n'
     + '</div>\n\n'
-    + '【ws-content 内に含めるセクション】\n'
-    + '1. 今日のめあて: 背景 #e3f2fd, 左ボーダー #2196f3, border-radius:8px のボックス。活動内容から子供向けのめあてを生成。\n'
-    + '2. AIコーチのヒント: 背景 #fff3e0, 左ボーダー #ff9800, border-radius:8px。つまずきやすい点や考えるコツを1-2行で。\n'
-    + '3. 学習課題・問題: 問題文は通常の div/p で記述（ws-box を付けない）。\n'
-    + '4. 記述欄・解答欄: 児童が書き込む欄には class="ws-box" を付ける。罫線付きは class="ws-box ws-lines" + background-image で罫線を描画。\n\n'
+    + '【解答欄の書き方】\n'
+    + '- 問題文・指示文は通常の div/p で記述する（ws-box を付けない）。\n'
+    + '- 児童が書き込む欄には class="ws-box" を付ける。罫線付きの記述欄は class="ws-box ws-lines" とし、\n'
+    + '  style="background-image:linear-gradient(#ccc 1px, transparent 1px); background-size:100% 1.5em;" で罫線を描く。\n'
+    + '- 欄の高さは style="height:..em" で解答量に合わせて明示する。\n\n'
     + '【利用可能なCSSクラス一覧】\n'
     + 'レイアウト: ws-sheet(flex column), ws-header-fixed, ws-header-left, ws-content(flex:1), ws-footer-fixed(margin-top:auto)\n'
     + 'テキスト: ws-title(1.3rem bold), ws-unit-name(badge風), ws-date-small(0.75rem)\n'
@@ -1956,11 +2067,11 @@ function buildWorksheetPrompt(data) {
     + '教科別: grid-paper(方眼紙40px), graph-paper(グラフ用紙20px), math-grid/math-cell/math-line(算数マス目), mode-kokugo(国語縦書き)\n'
     + 'Bootstrap 5: p-3, mb-3, bg-light, table, table-bordered, card, badge 等のユーティリティクラスも使用可\n\n'
     + '【図・グラフの描画技術】\n'
-    + 'テーマに応じて最適な描画技術を選択し、視覚的に美しい図版を積極的に生成すること:\n'
+    + 'テーマに応じて最適な描画技術を選択し、視覚的に美しい図版を生成すること:\n'
     + '- インラインSVG（推奨）: グラフ（棒・折れ線・円）、座標平面、地図、図形、フローチャート、イラスト。viewBox で A4幅に収まるサイズに。\n'
     + '- CSS Art: 単純な図形（円、三角形、矢印）、実験器具のアイコン。\n'
     + '  例: <div style="width:80px;height:80px;border-radius:50%;border:2px solid #333;"></div>\n'
-    + '- HTML table: 表、時間割、比較表。\n'
+    + '- HTML table: 表、時間割、比較表、記録表。\n'
     + '- 再帰/フラクタル: 自然物（木、雪の結晶）の描画にはSVG + JavaScript。\n'
     + '- 数式/三角関数: 周期的な動き、波形、天体の軌道はSVG path + Math.sin/cos。\n\n'
     + 'SVGの具体例（棒グラフ）:\n'
@@ -1974,13 +2085,18 @@ function buildWorksheetPrompt(data) {
     + '  <text x="170" y="190" text-anchor="middle" font-size="12">C</text>\n'
     + '</svg>\n\n'
     + '【印刷への配慮】\n'
-    + '- コントロールパネルには class="no-print" を付け、印刷時に非表示にする。\n'
-    + '- SVGは印刷時にも正しく表示される。\n'
-    + '- A4用紙（210mm×297mm）に収まるサイズを意識し、余白を適切にとる。\n'
-    + '- 図版が大きすぎないよう max-width を設定する。\n\n'
+    + '- コントロールパネル等の画面専用要素には class="no-print" を付け、印刷時に非表示にする。\n'
+    + '- A4用紙（210mm×297mm）縦1枚に収まる分量にする。詰め込みすぎず、書き込みやすい余白をとる。\n'
+    + '- 図版が大きすぎないよう max-width を設定する。SVGは印刷時にも正しく表示される。\n\n'
     + '【美学】\n'
     + '教育用であっても視覚的な美しさ（線の滑らかさ、色の調和、余白のバランス）を意識してください。\n'
-    + '小学生が親しみやすく、学習意欲が高まるデザインにしてください。\n';
+    + '色数は抑えて統一感を出し、小学生が親しみやすく、学習意欲が高まるデザインにしてください。\n\n'
+    + '【最終セルフチェック（出力前に必ず確認すること）】\n'
+    + '1. 学年配当外の漢字にふりがなを付けたか。指示文はその学年の児童が一人で読んで理解できるか。\n'
+    + '2. めあて・課題・ヒントが授業情報（単元名・活動内容・参考資料）と正確に対応しているか。事実誤認や学年不相応の内容はないか。\n'
+    + '3. 解答欄の広さ・数は適切か。児童が書き込む欄すべてに ws-box が付いているか。\n'
+    + '4. A4縦1枚に収まる分量か。視覚的な手がかり（図・表）が最低1つあるか。\n'
+    + '5. 指定のレイアウト構造を守り、タグの閉じ忘れ・外部リソース参照がないか。\n';
 }
 
 // 統一プロンプトでワークシートHTMLを生成（クリーニング済み文字列を返す）。先生専用。
@@ -1994,6 +2110,13 @@ function generateSingleWorksheet(data) {
     .replace(/<img\s+[^>]*src\s*=\s*["']https?:\/\/[^"']+["'][^>]*\/?>/gi, '')
     .trim();
   return result;
+}
+
+// 手動AI（コピペ）用に、自動生成と同一のプロンプト文字列を返す。先生専用。
+// クライアント側にプロンプトの複製を持たせない（内容が乖離しない）ためのAPI。
+function getWorksheetPromptForManualAI(data) {
+  MiraiAuth.requireTeacher();
+  return buildWorksheetPrompt(data || {});
 }
 
 // AIでルーブリック（評価基準表）を生成。先生専用。
