@@ -446,6 +446,47 @@ function invalidateLiveSnapshotCache() {
 }
 
 /**
+ * 先生向け進捗スナップショットAPI（進捗一覧のライブ更新用）。
+ * getData の clsProgress / clsFeedback と同じ集計を、この2シートだけ読んで返す。
+ * これまで進捗一覧は画面を切り替えるまで更新されず、「授業中の見取り」に
+ * 使えなかった。15秒の共有キャッシュ付きで、複数の先生が同時に開いても
+ * シート読みは15秒に1回に抑えられる。
+ */
+function getProgressSnapshot() {
+  try {
+    MiraiAuth.requireTeacher(); // クラス全員分のデータを返すため教員限定
+    const ssId = PROPERTIES.getProperty('SS_ID');
+    if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
+
+    const cache = CacheService.getScriptCache();
+    const cacheKey = 'progress_snapshot_' + ssId;
+    const cached = cache.get(cacheKey);
+    if (cached) return createSuccessResponse({ json: cached });
+
+    const ss = SpreadsheetApp.openById(ssId);
+    const clsProgress = {};
+    fetchSheetData(ss, DB_SCHEMA.LearningLogs.name).forEach(r => {
+      const name = String(r[2]); const taskId = String(r[3]); const status = String(r[4]); const reflection = String(r[5] || "");
+      if (!clsProgress[name]) clsProgress[name] = {};
+      if (!clsProgress[name][taskId]) clsProgress[name][taskId] = { status: '', reflection: '' };
+      if (status && status !== 'メモ') clsProgress[name][taskId].status = status;
+      if (reflection) clsProgress[name][taskId].reflection = reflection;
+    });
+
+    const clsFeedback = {};
+    fetchSheetData(ss, DB_SCHEMA.Feedback.name).forEach(r => {
+      const name = String(r[1]); const taskId = String(r[2]); const stamp = String(r[3]);
+      if (!clsFeedback[name]) clsFeedback[name] = {};
+      clsFeedback[name][taskId] = stamp;
+    });
+
+    const json = JSON.stringify({ progress: clsProgress, feedback: clsFeedback });
+    try { cache.put(cacheKey, json, 15); } catch (ignore) { /* 100KB超過時は素通し */ }
+    return createSuccessResponse({ json: json });
+  } catch (e) { return createErrorResponse(e); }
+}
+
+/**
  * 児童向け軽量ポーリングAPI。
  * 先生スタンプ（Feedback）と今日以降の時間割（ClassSchedule）だけを返す。
  * getStudentProgress（6シート全読み）を定期実行するのは重すぎるため、

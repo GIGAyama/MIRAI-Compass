@@ -343,6 +343,11 @@ function startAutoRefresh() {
       fetchStudentPulse();
     }
 
+    // 先生モードでは30秒に1回、クラスの進捗集計も取得する（進捗一覧のライブ更新）。
+    if (appState.mode === 'teacher' && pollTickCount % 3 === 0 && typeof fetchTeacherProgressSnapshot === 'function') {
+      fetchTeacherProgressSnapshot();
+    }
+
   }, CONSTANTS.REFRESH_INTERVAL);
 }
 
@@ -760,10 +765,42 @@ function getStepNumber(stepStr) {
 }
 
 // トースト通知（右上のポップアップ）
+// ⚠️ SweetAlert2 は同時に1つしか表示できず、モーダル（名簿管理・単元管理など）を
+//    開いている最中に Swal のトーストを出すと、モーダルごと閉じて編集内容が消える。
+//    実際に、ポーリングの SOS 警告トーストが名簿編集中のモーダルを閉じる事故が起きる。
+//    モーダル表示中は Swal を使わない自前の軽量トーストに切り替える。
 function showToast(icon, title) {
-  Swal.fire({ toast: true, position: 'top-end', icon: icon, title: title, timer: 2000, showConfirmButton: false });
+  const popup = (typeof Swal !== 'undefined' && Swal.isVisible()) ? Swal.getPopup() : null;
+  const modalOpen = popup && !popup.classList.contains('swal2-toast');
+  if (modalOpen) {
+    showLiteToast(icon, title);
+  } else {
+    Swal.fire({ toast: true, position: 'top-end', icon: icon, title: title, timer: 2000, showConfirmButton: false });
+  }
   // スクリーンリーダー向けに読み上げる（エラー系アイコンは alert 領域へ）
   if (typeof announce === 'function') announce(title, icon === 'error' || icon === 'warning');
+}
+
+// Swal を使わない軽量トースト（モーダルと共存できる）
+function showLiteToast(icon, title) {
+  let host = document.getElementById('lite-toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'lite-toast-host';
+    document.body.appendChild(host);
+  }
+  const colors = { success: '#2e9e63', info: '#1a73e8', warning: '#b5850c', error: '#d33333' };
+  const icons = { success: 'bi-check-circle-fill', info: 'bi-info-circle-fill', warning: 'bi-exclamation-triangle-fill', error: 'bi-x-circle-fill' };
+  const el = document.createElement('div');
+  el.className = 'lite-toast';
+  el.style.setProperty('--lt-color', colors[icon] || colors.info);
+  el.innerHTML = `<i class="bi ${icons[icon] || icons.info}" aria-hidden="true"></i><span></span>`;
+  el.querySelector('span').textContent = title; // textContent 代入なのでエスケープ不要
+  host.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 350);
+  }, 2200);
 }
 
 // エラー表示

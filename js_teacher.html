@@ -223,7 +223,7 @@ const TEACHER_VIEWS = {
                hint: '子どもの「いまの課題」とSOSがリアルタイムで並びます。' },
   seating:   { group: 'live',  label: '座席',     icon: 'bi-grid-3x3-gap',  title: '座席表', auto: true,
                hint: '教室の座席の並びで見守れます（カードはドラッグで配置）。' },
-  heatmap:   { group: 'live',  label: '進捗一覧', icon: 'bi-table',         title: '進捗一覧',
+  heatmap:   { group: 'live',  label: '進捗一覧', icon: 'bi-table',         title: '進捗一覧', auto: true,
                hint: 'クラス全員×課題の進み具合を一目で確認。セルを押すとスタンプを送れます。' },
   dashboard: { group: 'after', label: '添削',     icon: 'bi-check2-square', title: 'ワークシート添削',
                hint: '提出されたワークシートを確認して、赤ペンとコメントで返却します。' },
@@ -434,6 +434,35 @@ function renderTeacherDashboardContent() {
 }
 
 /**
+ * [サーバー通信] クラス進捗の定期取得（js_core のポーリングから30秒ごとに呼ばれる）。
+ * 進捗一覧を開いているときは、その場で表を静かに描き直す。
+ * まとめビューは入力欄があるため描き直さない（データの更新だけ行う）。
+ */
+function fetchTeacherProgressSnapshot() {
+  google.script.run
+    .withSuccessHandler(res => {
+      if (!res || !res.success || !res.json) return;
+      let d;
+      try { d = JSON.parse(res.json); } catch (e) { return; }
+      if (d.progress) dataStore.clsProgress = d.progress;
+      if (d.feedback) dataStore.clsFeedback = d.feedback;
+      if (appState.mode === 'teacher' && appState.view.teacher === 'heatmap') {
+        const el = document.getElementById('t-area');
+        if (!el) return;
+        // セルをキーボードで移動中（フォーカスが表の中にある）は描き直さない。
+        // 描き直すとフォーカスが飛んで操作が中断されてしまう。次の30秒後に更新される。
+        const active = document.activeElement;
+        if (active && active !== document.body && el.contains(active)) return;
+        const scrollPos = el.scrollTop;
+        renderHeatmap(el, getFilteredStudents());
+        el.scrollTop = scrollPos;
+      }
+    })
+    .withFailureHandler(e => console.error('Progress snapshot error', e))
+    .getProgressSnapshot();
+}
+
+/**
  * [データ処理] 表示対象の生徒データを抽出
  */
 function getFilteredStudents() {
@@ -641,10 +670,32 @@ function renderSeatingView(container) {
     </div>`;
 
   const canvas = document.getElementById('seating-canvas');
-  
+
+  // まだ座席が保存されていない児童は、全員 (50,50) に積み重なって出てしまっていた。
+  // 出席番号順にグリッドの空きマスへ自動整列させ、初回から「教室らしい」並びで始める。
+  // （自動配置は表示だけ。「配置を保存」を押した時点で確定する）
+  const GRID = CONSTANTS.SEAT_GRID_SIZE;
+  const COLS = 6;
+  const slotKey = (px, py) => Math.round((px - 10) / GRID) + ',' + Math.round((py - 10) / GRID);
+  const occupied = new Set(students.filter(s => s.x || s.y).map(s => slotKey(s.x, s.y)));
+  const autoPos = new Map();
+  let slot = 0;
+  students
+    .filter(s => !s.x && !s.y)
+    .sort((a, b) => ((a.number || 999) - (b.number || 999)) || String(a.name).localeCompare(String(b.name)))
+    .forEach(s => {
+      while (occupied.has((slot % COLS) + ',' + Math.floor(slot / COLS))) slot++;
+      const px = (slot % COLS) * GRID + 10;
+      const py = Math.floor(slot / COLS) * GRID + 10;
+      occupied.add((slot % COLS) + ',' + Math.floor(slot / COLS));
+      autoPos.set(s.name, { x: px, y: py });
+      slot++;
+    });
+
   students.forEach(s => {
-    const x = s.x || 50;
-    const y = s.y || 50;
+    const auto = autoPos.get(s.name);
+    const x = s.x || (auto ? auto.x : 50);
+    const y = s.y || (auto ? auto.y : 50);
     const isSos = (s.mode === 'たすけて' || s.mode === 'sos');
     const isFocus = (s.mode === 'しゅうちゅう' || s.mode === 'focus');
     
@@ -818,6 +869,25 @@ function saveSeating() {
     });
 }
 
+// まとめビューの「書きかけフィードバック」置き場。
+// ビュー・クラスタブの切り替えは画面全体を作り直すため、そのままだと
+// 入力途中のコメントが黙って消えていた。名前をキーに下書きを持ち、再描画時に復元する。
+// 保存が成功した分だけ消す。
+let summaryDrafts = {};
+
+/** [アクション] まとめビューの入力を下書きとして覚える（oninput/onchange から呼ぶ） */
+function storeSummaryDraft(studentName, uniqueId) {
+  const commentInput = document.getElementById(`fb-text-${uniqueId}`);
+  const stampEl = document.querySelector(`input[name="stamp-${uniqueId}"]:checked`);
+  summaryDrafts[studentName] = {
+    feedback: commentInput ? commentInput.value : '',
+    stamp: stampEl ? stampEl.value : ''
+  };
+  // 未保存であることが分かるよう、保存ボタンを注意色にする
+  const btn = document.getElementById(`btn-save-${uniqueId}`);
+  if (btn) { btn.classList.remove('btn-primary'); btn.classList.add('btn-warning'); }
+}
+
 /**
  * [まとめビュー] ポートフォリオ一覧とフィードバック
  */
@@ -842,8 +912,10 @@ function renderSummaryListView(container) {
       pf = (typeof rawPf === 'object') ? rawPf : { summary: rawPf, feedback: "", stamp: "" };
     }
     const summary = pf.summary || "";
-    const feedback = pf.feedback || "";
-    const stamp = pf.stamp || "";
+    // 書きかけの下書きがあれば、保存済みの値より優先して復元する
+    const draft = summaryDrafts[s.name];
+    const feedback = draft ? draft.feedback : (pf.feedback || "");
+    const stamp = draft ? draft.stamp : (pf.stamp || "");
     const pfStudentId = pf.studentId || ""; // 本人メール（あれば本人の行にフィードバックを着地させる）
 
     // スキル集計
@@ -889,14 +961,14 @@ function renderSummaryListView(container) {
         </td>
         <td class="st-col-feedback align-middle">
           <div class="stamp-select-group">
-            <label><input type="radio" name="stamp-${uniqueId}" value="check" class="stamp-input" ${stamp==='check'?'checked':''}><span class="stamp-option" title="確認">✅</span></label>
-            <label><input type="radio" name="stamp-${uniqueId}" value="good" class="stamp-input" ${stamp==='good'?'checked':''}><span class="stamp-option" title="いいね">👍</span></label>
-            <label><input type="radio" name="stamp-${uniqueId}" value="great" class="stamp-input" ${stamp==='great'?'checked':''}><span class="stamp-option" title="すばらしい">💮</span></label>
-            <label><input type="radio" name="stamp-${uniqueId}" value="support" class="stamp-input" ${stamp==='support'?'checked':''}><span class="stamp-option" title="応援">🚩</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="check" class="stamp-input" ${stamp==='check'?'checked':''} onchange="storeSummaryDraft('${escJs(s.name)}', '${uniqueId}')"><span class="stamp-option" title="確認">✅</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="good" class="stamp-input" ${stamp==='good'?'checked':''} onchange="storeSummaryDraft('${escJs(s.name)}', '${uniqueId}')"><span class="stamp-option" title="いいね">👍</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="great" class="stamp-input" ${stamp==='great'?'checked':''} onchange="storeSummaryDraft('${escJs(s.name)}', '${uniqueId}')"><span class="stamp-option" title="すばらしい">💮</span></label>
+            <label><input type="radio" name="stamp-${uniqueId}" value="support" class="stamp-input" ${stamp==='support'?'checked':''} onchange="storeSummaryDraft('${escJs(s.name)}', '${uniqueId}')"><span class="stamp-option" title="応援">🚩</span></label>
           </div>
           <div class="input-group input-group-sm">
-            <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${escapeHtml(feedback)}">
-            <button id="btn-save-${uniqueId}" class="btn btn-primary" onclick="saveListFeedback('${escJs(s.name)}', '${uniqueId}', '${escJs(pfStudentId)}')">保存</button>
+            <input type="text" id="fb-text-${uniqueId}" class="form-control" placeholder="コメントを入力..." value="${escapeHtml(feedback)}" oninput="storeSummaryDraft('${escJs(s.name)}', '${uniqueId}')">
+            <button id="btn-save-${uniqueId}" class="btn ${draft ? 'btn-warning' : 'btn-primary'}" onclick="saveListFeedback('${escJs(s.name)}', '${uniqueId}', '${escJs(pfStudentId)}')">保存</button>
           </div>
         </td>
       </tr>`;
@@ -942,8 +1014,16 @@ function saveListFeedback(studentName, uniqueId, studentId) {
   runTeacher('savePortfolioFeedback', [studentName, appState.unit.id, comment, stamp, studentId || ''],
     () => {
       showToast('success', '保存しました');
+      // 保存できたので下書きを消し、ローカルデータにも反映（再描画時に保存済みの値が出る）
+      delete summaryDrafts[studentName];
+      if (dataStore.clsPortfolios && dataStore.clsPortfolios[studentName] && dataStore.clsPortfolios[studentName][appState.unit.id]) {
+        dataStore.clsPortfolios[studentName][appState.unit.id].feedback = comment;
+        dataStore.clsPortfolios[studentName][appState.unit.id].stamp = stamp;
+      }
       btn.disabled = false;
       btn.innerHTML = originalText;
+      btn.classList.remove('btn-warning');
+      btn.classList.add('btn-primary');
     },
     (e) => {
       handleError(e);
@@ -986,6 +1066,15 @@ function saveAllListFeedbacks() {
   runTeacher('saveAllPortfolios', [feedbackList],
     () => {
       showToast('success', '全員分を保存しました');
+      // 全員分が保存できたので下書きを消し、ローカルデータにも反映する
+      summaryDrafts = {};
+      feedbackList.forEach(f => {
+        if (dataStore.clsPortfolios && dataStore.clsPortfolios[f.studentName] && dataStore.clsPortfolios[f.studentName][f.unitId]) {
+          dataStore.clsPortfolios[f.studentName][f.unitId].feedback = f.feedback;
+          dataStore.clsPortfolios[f.studentName][f.unitId].stamp = f.stamp;
+        }
+      });
+      renderSummaryListView(document.getElementById('t-area'));
       btn.disabled = false;
       btn.innerHTML = originalHtml;
     },
@@ -2554,7 +2643,12 @@ function parsePastedText(text) {
   if (lines.length === 0) return;
 
   let addedCount = 0;
-  
+  let skippedCount = 0;
+
+  // 重複チェック用：既存の名前（スペース表記ゆれを吸収して比較）
+  const normName = n => String(n).replace(/[\s　]+/g, '');
+  const seen = new Set(rosterEditData.map(s => normName(s.name)));
+
   lines.forEach(line => {
     // タブまたはカンマで分割
     const cols = line.split(/\t|,/).map(c => c.trim()).filter(c => c);
@@ -2562,13 +2656,13 @@ function parsePastedText(text) {
 
     let num = 0;
     let name = "";
-    
+
     // データ解析ロジック
     // パターン1: [番号] [名前] ...
     if (cols.length >= 2 && !isNaN(cols[0])) {
         num = parseInt(cols[0]);
         name = cols[1];
-    } 
+    }
     // パターン2: [名前] のみ
     else if (cols.length >= 1) {
         // 自動採番: 現在の最大値 + 1
@@ -2576,16 +2670,21 @@ function parsePastedText(text) {
         num = maxNum + 1;
         name = cols[0];
     }
-    
+
     if (name) {
-        // 名前が重複していないか簡易チェック（任意）
+        // 同じ名前はスキップする（同じ表を2回貼ると名簿が倍になる事故の防止）
+        if (seen.has(normName(name))) { skippedCount++; return; }
+        seen.add(normName(name));
         rosterEditData.push({ number: num, name: name, isActive: true });
         addedCount++;
     }
   });
-  
-  if (addedCount > 0) {
-      showToast('success', `${addedCount}件を取り込みました`);
+
+  if (addedCount > 0 || skippedCount > 0) {
+      const msg = skippedCount > 0
+        ? `${addedCount}件を取り込みました（すでにある${skippedCount}件はスキップ）`
+        : `${addedCount}件を取り込みました`;
+      showToast(addedCount > 0 ? 'success' : 'info', msg);
       renderRosterTable();
   }
 }

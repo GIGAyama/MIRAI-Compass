@@ -802,6 +802,26 @@ body.has-schedule-bar main.container { padding-top: 52px; }
   box-shadow: 0 2px 6px rgba(26, 115, 232, .35);
 }
 
+/* 軽量トースト（モーダル表示中に Swal の代わりに使う。Swal のモーダルより手前） */
+#lite-toast-host {
+  position: fixed; top: 12px; right: 12px; z-index: 2147483647;
+  display: flex; flex-direction: column; gap: .5rem; pointer-events: none;
+}
+.lite-toast {
+  display: flex; align-items: center; gap: .5rem;
+  background: #fff; color: #333;
+  border-left: 4px solid var(--lt-color, var(--color-primary));
+  border-radius: .6rem; box-shadow: 0 6px 20px rgba(0,0,0,.18);
+  padding: .55rem .9rem; font-size: .9rem; font-weight: 600;
+  animation: lite-toast-in .25s ease;
+}
+.lite-toast i { color: var(--lt-color, var(--color-primary)); }
+.lite-toast.out { opacity: 0; transform: translateY(-6px); transition: all .3s ease; }
+@keyframes lite-toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: none; }
+}
+
 /* はじめかたガイド */
 .setup-guide-card { background: linear-gradient(135deg, #eef4ff 0%, #f6f0ff 100%); }
 .setup-guide-bar { background: #fff8e6; border: 1px solid #f4e3b0; }
