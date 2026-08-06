@@ -536,15 +536,17 @@ function getProgressSnapshot() {
  */
 function getStudentPulse(studentName) {
   try {
-    MiraiAuth.requireUser();
+    const sid = MiraiAuth.requireUser();
     const ssId = PROPERTIES.getProperty('SS_ID');
     if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
     const ss = SpreadsheetApp.openById(ssId);
 
-    // Feedback は先生が名前指定で書き込む（getStudentProgress と同じ照合ルール）
+    // スタンプの照合ルールは getStudentProgress と同一
+    // （studentId がある行は本人メールでだけ照合、無い行は表示名でフォールバック）
     const fbMap = {};
     fetchSheetData(ss, DB_SCHEMA.Feedback.name).forEach(r => {
-      if (r[1] === studentName) fbMap[String(r[2])] = String(r[3]);
+      const rowSid = String(r[6] || "");
+      if (rowSid ? rowSid === sid : r[1] === studentName) fbMap[String(r[2])] = String(r[3]);
     });
 
     const todayStr = Utilities.formatDate(new Date(), "JST", "yyyy-MM-dd");
@@ -588,11 +590,12 @@ function getStudentProgress(studentName, classId, currentUnitId) {
       }
     });
 
-    // Feedback は先生が名前指定で書き込む（studentId 列は空）。stamp 用に名前で照合する。
-    // ※先生発行スタンプのみ・機微度は低いが、名前ベースのため残留リスクとして報告済み。
+    // スタンプの照合ルール：行に studentId が入っていれば本人メールでだけ照合（同名誤配なし）。
+    // 入っていない行（旧データ・ID不明時）は従来どおり表示名で照合するフォールバック。
     const fbMap = {};
     fetchSheetData(ss, DB_SCHEMA.Feedback.name).forEach(r => {
-      if (r[1] === studentName) fbMap[String(r[2])] = String(r[3]);
+      const rowSid = String(r[6] || "");
+      if (rowSid ? rowSid === sid : r[1] === studentName) fbMap[String(r[2])] = String(r[3]);
     });
 
     const myTasks = [];
@@ -1152,13 +1155,18 @@ function savePortfolio(studentName, unitId, summary, classId) {
 
 // --- フィードバック・評価 ---
 
-function sendFeedback(studentName, taskId, stamp, classId) {
+function sendFeedback(studentName, taskId, stamp, classId, studentId) {
   const lock = LockService.getScriptLock();
   if (lock.tryLock(5000)) {
     try {
       MiraiAuth.requireTeacher();
       const ss = getSpreadsheet();
-      ss.getSheetByName(DB_SCHEMA.Feedback.name).appendRow([Utilities.getUuid(), studentName, taskId, stamp, new Date(), classId || ""]);
+      // studentId（本人メール）が分かる場合は末尾列に残す。
+      // 児童側の読み出しは「studentId があれば studentId でだけ照合」するため、
+      // 同名児童がいてもスタンプが他人に誤配されなくなる（無い行は従来どおり名前照合）。
+      ss.getSheetByName(DB_SCHEMA.Feedback.name).appendRow([
+        Utilities.getUuid(), studentName, taskId, stamp, new Date(), classId || "", String(studentId || "")
+      ]);
       return createSuccessResponse();
     } catch (e) { return createErrorResponse(e); } finally { lock.releaseLock(); }
   } else { return createErrorResponse(new Error("Timeout")); }

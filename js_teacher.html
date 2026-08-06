@@ -2769,9 +2769,29 @@ function submitSaveRoster() {
   const classId = document.getElementById('roster-class').value.trim();
   // このモーダルは確認ボタン非表示のため showValidationMessage は使えない
   if (!classId) { showToast('error', 'クラス名を入力してください'); return; }
-  
+
   if (rosterEditData.length === 0) {
      if(!confirm('名簿が空ですが、このまま保存しますか？（現在の名簿が消去されます）')) return;
+  }
+
+  // 同名の在籍児童がいると、ログインの名前選択・計画・スタンプの記録が区別できない。
+  // 保存は止めないが、必ず気づけるように具体名を挙げて確認する。
+  const normName = n => String(n).replace(/[\s　]+/g, '');
+  const seenNames = new Map();
+  const dupeNames = new Set();
+  rosterEditData.forEach(s => {
+    if (s.isActive === false || !s.name || !s.name.trim()) return;
+    const key = normName(s.name);
+    if (seenNames.has(key)) dupeNames.add(seenNames.get(key));
+    else seenNames.set(key, s.name.trim());
+  });
+  if (dupeNames.size > 0) {
+    const ok = confirm(
+      '同じ名前の児童が2人以上います：' + Array.from(dupeNames).join('、') + '\n\n' +
+      '名前が同じだと、ログインの名前選択や記録の区別ができません。\n' +
+      '「山田た」「山田ゆ」のように区別できる表示名にすることをおすすめします。\n\n' +
+      'このまま保存しますか？');
+    if (!ok) return;
   }
 
   showLoading();
@@ -2810,7 +2830,11 @@ function sendStamp(name, tid, stamp) {
   dataStore.clsFeedback[name][tid] = stamp;
   renderTeacherDashboardContent(); // 更新
   showToast('success', 'スタンプ送信');
-  runTeacher('sendFeedback', [name, tid, stamp, appState.view.teacherClassId !== 'All' ? appState.view.teacherClassId : '']);
+  // 本人ID（ログイン時に記録された Google メール）が分かればスタンプに添える。
+  // 児童側は ID がある行を ID でだけ照合するため、同名児童への誤配を防げる。
+  const live = (dataStore.liveStatus || []).find(d => d.name === name);
+  const studentId = live && live.id ? live.id : '';
+  runTeacher('sendFeedback', [name, tid, stamp, appState.view.teacherClassId !== 'All' ? appState.view.teacherClassId : '', studentId]);
 }
 
 /**
