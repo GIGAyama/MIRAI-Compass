@@ -506,6 +506,12 @@ function renderApp() {
     if (appState.mode === 'teacher') {
       // 先生モード
       if (typeof removeStudentBottomNav === 'function') removeStudentBottomNav(); // 児童タブバーを消す
+      // 児童モードの浮遊UI（タイマー・授業通知バー）が残らないよう片付ける
+      ['my-timer-widget', 'timer-launcher', 'schedule-notify-bar'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+      });
+      document.body.classList.remove('has-schedule-bar');
       mainEl.classList.add('teacher-mode'); // 横幅制限を解除
       settingsBtn.classList.remove('d-none'); // 設定ボタン表示
       exitBtn.classList.remove('d-none');     // 終了ボタン表示
@@ -628,9 +634,13 @@ function checkScheduleAndNotify() {
       document.body.appendChild(notifyBar);
     }
     notifyBar.innerHTML = `<i class="bi bi-broadcast me-2"></i><span class="fw-bold">${msgHtml}</span> <small class="ms-2 border rounded-pill px-2">移動する</small>`;
+    // バーは fixed なので、そのままだと画面上部の内容（あいさつ等）に重なる。
+    // 本文側に余白を足すためのクラスを付ける（css.html 参照）。
+    document.body.classList.add('has-schedule-bar');
   } else {
     // 時間外なら通知バーを消す
     if (notifyBar) notifyBar.remove();
+    document.body.classList.remove('has-schedule-bar');
   }
 }
 

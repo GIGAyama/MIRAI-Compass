@@ -767,6 +767,9 @@ input.form-control[readonly][style*="width: 40px"] { min-width: 44px; }
 /* 座席表・計画づくりは指で動かす面なので、操作中に画面ごと動かない */
 .seating-canvas, .plan-drop-zone-v { touch-action: pan-y; }
 
+/* 授業通知バー（fixed）が出ている間、本文の先頭が隠れないよう余白を足す */
+body.has-schedule-bar main.container { padding-top: 52px; }
+
 /* クエスト系の押しボタンは背景がグラデーションで濃く、既定の青いリングが
    沈んで見えないことがある。白いふちどり＋青リングの二重にして、
    どの色の上でもキーボードフォーカスが確実に見えるようにする。 */
