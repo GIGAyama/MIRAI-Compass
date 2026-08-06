@@ -1302,14 +1302,19 @@ var Worksheet = (function () {
 
   function saveGrading() {
     if (!State.gradingRow) return;
+    var rowIndex = State.gradingRow;
+    var fbText = byId('feedbackTextInput').value; // close() で消える前に読む
     UI.showLoading();
     Server.callTeacher('saveFeedback', {
-      rowIndex: State.gradingRow,
-      feedbackText: byId('feedbackTextInput').value,
+      rowIndex: rowIndex,
+      feedbackText: fbText,
       canvasJson: State.gradingCanvas ? JSON.stringify(State.gradingCanvas.toJSON()) : null
     }).then(function () {
       UI.toast('返却しました');
       close();
+      // 添削ダッシュボード側に返却結果をその場で反映してもらう
+      // （以前は先生が「更新」を押すまでカードが「提出ずみ」のままだった）
+      if (typeof onWorksheetGraded === 'function') onWorksheetGraded(rowIndex, fbText);
     }).finally(function () { UI.hideLoading(); });
   }
 

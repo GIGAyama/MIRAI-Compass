@@ -1097,6 +1097,10 @@ var dashboardCache = null;                 // { submissions:[...], worksheets:[.
 var dashboardFilter = { taskId: 'all', status: 'all', name: '', sort: 'submittedAt' };
 var dashboardBatch = null;                 // AI 一括コメントのレビュー中データ（配列）または null
 var dashboardBatchTitle = '';              // AI 一括レビューの見出し（授業名）
+// カードは一度に全部並べない。base64 サムネイル付きカードを何百枚も一気に
+// innerHTML すると Chromebook では描画が数秒止まるため、24枚ずつ段階表示する。
+var DASH_PAGE_SIZE = 24;
+var dashboardShownCount = DASH_PAGE_SIZE;
 
 // 入力中（input/textarea/select/contentEditable）ならキーボード操作を横取りしない
 function isDashTypingTarget(t) {
@@ -1255,11 +1259,12 @@ function renderTeacherDashboardView(el) {
 }
 
 // フィルタ操作ハンドラ ---------------------------------------------------------
-function setDashTask(v) { dashboardFilter.taskId = v; dashboardBatch = null; renderTeacherDashboardView(document.getElementById('t-area')); }
-function setDashStatus(v) { dashboardFilter.status = v; renderDashboardGrid(); }
-function setDashSort(v) { dashboardFilter.sort = v; renderDashboardGrid(); }
-function setDashName(v) { dashboardFilter.name = v; renderDashboardGrid(); }
-function refreshDashboard() { dashboardCache = null; dashboardBatch = null; renderTeacherDashboardView(document.getElementById('t-area')); }
+function setDashTask(v) { dashboardFilter.taskId = v; dashboardBatch = null; dashboardShownCount = DASH_PAGE_SIZE; renderTeacherDashboardView(document.getElementById('t-area')); }
+function setDashStatus(v) { dashboardFilter.status = v; dashboardShownCount = DASH_PAGE_SIZE; renderDashboardGrid(); }
+function setDashSort(v) { dashboardFilter.sort = v; dashboardShownCount = DASH_PAGE_SIZE; renderDashboardGrid(); }
+function setDashName(v) { dashboardFilter.name = v; dashboardShownCount = DASH_PAGE_SIZE; renderDashboardGrid(); }
+function refreshDashboard() { dashboardCache = null; dashboardBatch = null; dashboardShownCount = DASH_PAGE_SIZE; renderTeacherDashboardView(document.getElementById('t-area')); }
+function showMoreDashboardCards() { dashboardShownCount += DASH_PAGE_SIZE; renderDashboardGrid(); }
 
 // カードグリッド＋統計バッジだけを再描画（コントロールは作り直さない＝入力フォーカスを保つ）
 function renderDashboardGrid() {
@@ -1277,11 +1282,20 @@ function renderDashboardGrid() {
       + '<span class="badge bg-warning text-dark">未添削 ' + (total - graded) + '</span>';
   }
 
-  var list = dashboardVisible();
-  if (list.length === 0) {
-    gridEl.innerHTML = '<div class="text-center p-5 text-muted">条件に合う提出物がありません</div>';
+  var fullList = dashboardVisible();
+  if (fullList.length === 0) {
+    var noneAtAll = !dashboardCache || (dashboardCache.submissions || []).length === 0;
+    gridEl.innerHTML = noneAtAll
+      ? teacherEmptyState('bi-check2-square', 'まだ提出物がありません',
+          '単元設計でワークシートを用意すると、児童はタスクを開いてその場で回答・提出できます。提出されるとここに並びます。',
+          `<button class="btn btn-primary btn-sm rounded-pill px-3" onclick="setTeacherView('design')"><i class="bi bi-pencil-ruler me-1" aria-hidden="true"></i>単元設計をひらく</button>`)
+      : '<div class="text-center p-5 text-muted">条件に合う提出物がありません</div>';
     return;
   }
+
+  // 段階表示：まず dashboardShownCount 枚だけ描き、残りは「もっと見る」で足す
+  var list = fullList.slice(0, dashboardShownCount);
+  var remaining = fullList.length - list.length;
 
   var cards = list.map(function (s) {
     var graded = MiraiShared.normSubmission(s.status) === 'graded';
@@ -1306,7 +1320,11 @@ function renderDashboardGrid() {
       + '</button>';
   }).join('');
 
-  gridEl.innerHTML = '<div class="dash-card-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0.75rem">' + cards + '</div>';
+  var moreBtn = remaining > 0
+    ? '<div class="text-center py-3"><button type="button" class="btn btn-outline-primary rounded-pill px-4" onclick="showMoreDashboardCards()"><i class="bi bi-chevron-down me-1" aria-hidden="true"></i>もっと見る（のこり ' + remaining + '件）</button></div>'
+    : '';
+
+  gridEl.innerHTML = '<div class="dash-card-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0.75rem">' + cards + '</div>' + moreBtn;
 }
 
 // グリッド内キーボード操作：矢印で移動、Enter で開く。入力欄では無効。
@@ -1368,8 +1386,7 @@ function openDashboardDetail(rowIndex) {
     + '  <button type="button" class="btn btn-primary btn-sm rounded-pill px-3" onclick="saveDashboardComment(\'' + escJs(String(s.rowIndex)) + '\')"><i class="bi bi-save me-1" aria-hidden="true"></i>コメントを保存</button>'
     + '  <button type="button" class="btn btn-danger btn-sm rounded-pill px-3" onclick="openDashboardGrading(\'' + escJs(String(s.rowIndex)) + '\')"><i class="bi bi-pencil-fill me-1" aria-hidden="true"></i>赤ペンで添削</button>'
     + '  <button type="button" class="btn btn-outline-secondary btn-sm rounded-pill px-3" onclick="closeDashboardDetail()">閉じる</button>'
-    + '</div>'
-    + '<div class="form-text small mt-1">赤ペン添削で返却したあとは「更新」を押すと状態が反映されます。</div>';
+    + '</div>';
   panel.classList.remove('d-none');
   // Esc で閉じる（入力中は横取りしない）
   panel.onkeydown = function (e) {
@@ -1409,7 +1426,7 @@ function saveDashboardComment(rowIndex) {
   });
 }
 
-// 赤ペン添削（フルキャンバス）を開く。返却後の状態反映は「更新」で行う。
+// 赤ペン添削（フルキャンバス）を開く。返却すると onWorksheetGraded で即時反映される。
 function openDashboardGrading(rowIndex) {
   var s = findDashSub(rowIndex);
   if (!s) return;
@@ -1418,6 +1435,22 @@ function openDashboardGrading(rowIndex) {
     Worksheet.openGrading(s);
   } else {
     handleError({ message: '添削画面を開けませんでした' });
+  }
+}
+
+/**
+ * [連携] 赤ペン添削の「返却」完了時に js_worksheet から呼ばれる。
+ * キャッシュ上の該当提出を添削ずみへ更新し、ダッシュボードを開いていれば描き直す。
+ * これで返却のたびに「更新」を押してすべての提出物を取り直す必要がなくなった。
+ */
+function onWorksheetGraded(rowIndex, feedbackText) {
+  var s = findDashSub(rowIndex);
+  if (s) {
+    s.status = 'graded';
+    s.feedbackText = feedbackText;
+  }
+  if (appState.mode === 'teacher' && appState.view.teacher === 'dashboard' && dashboardBatch === null) {
+    renderDashboardGrid();
   }
 }
 
