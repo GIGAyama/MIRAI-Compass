@@ -702,6 +702,35 @@ function createStudentTaskCard(t) {
 
 let isGalleryAnonymous = true; // デフォルトは匿名
 
+// みんなの計画の鮮度管理。開くたびに最新を取りにいくが、連続の再描画
+// （名前の表示切替など）では取り直さないよう10秒の間隔を空ける。
+let galleryLastFetch = 0;
+let galleryFetchInFlight = false;
+
+/** [サーバー通信] クラスの計画・マイタスクを取り直して、表示中なら描き直す */
+function refreshGalleryData() {
+  if (galleryFetchInFlight) return;
+  galleryFetchInFlight = true;
+  galleryLastFetch = Date.now();
+  google.script.run
+    .withSuccessHandler(res => {
+      galleryFetchInFlight = false;
+      if (!res || !res.success || !res.json) return;
+      let d;
+      try { d = JSON.parse(res.json); } catch (e) { return; }
+      if (d.plans) dataStore.clsPlans = d.plans;
+      if (d.myTasks) dataStore.clsMyTasks = d.myTasks;
+      // 自分の計画は手元の編集が最新なので上書きしない
+      if (appState.user.name && dataStore.studentPlan) {
+        if (!dataStore.clsPlans[appState.user.name]) dataStore.clsPlans[appState.user.name] = {};
+        dataStore.clsPlans[appState.user.name][appState.unit.id] = dataStore.studentPlan;
+      }
+      if (appState.mode === 'student' && appState.view.student === 'gallery') renderGalleryWalk();
+    })
+    .withFailureHandler(e => { galleryFetchInFlight = false; console.error('Gallery refresh error', e); })
+    .getGalleryData();
+}
+
 function renderGalleryWalk() {
   const container = document.getElementById('app-container');
   const unitId = appState.unit.id;
@@ -782,6 +811,10 @@ function renderGalleryWalk() {
       </div>
     `;
   });
+
+  // 開いたら（10秒に1回まで）最新の計画を取りにいく。手元のキャッシュで即描画した上で、
+  // 届いたら静かに描き直すので、待ち時間はない。
+  if (Date.now() - galleryLastFetch > 10000) refreshGalleryData();
 
   const anonBtnText = isGalleryAnonymous ? '<i class="bi bi-eye"></i> 名前をみる' : '<i class="bi bi-eye-slash"></i> 名前をかくす';
   const anonBtnClass = isGalleryAnonymous ? 'btn-outline-secondary' : 'btn-secondary';

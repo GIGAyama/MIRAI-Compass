@@ -446,6 +446,48 @@ function invalidateLiveSnapshotCache() {
 }
 
 /**
+ * ギャラリーウォーク用の軽量API（クラスの計画とマイタスク）。
+ * 「みんなの計画」はこれまでログイン時のスナップショットを表示し続けており、
+ * 友だちが計画を変えても児童の画面には反映されなかった。
+ * 返す内容は getData が児童にも返している plans / myTasks と同じ範囲
+ * （進捗・ふりかえり等の機微データは含まない）。20秒の共有キャッシュ付き。
+ */
+function getGalleryData() {
+  try {
+    MiraiAuth.requireUser();
+    const ssId = PROPERTIES.getProperty('SS_ID');
+    if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
+
+    const cache = CacheService.getScriptCache();
+    const cacheKey = 'gallery_data_' + ssId;
+    const cached = cache.get(cacheKey);
+    if (cached) return createSuccessResponse({ json: cached });
+
+    const ss = SpreadsheetApp.openById(ssId);
+    const clsPlans = {};
+    fetchSheetData(ss, DB_SCHEMA.StudentPlans.name).forEach(r => {
+      const name = String(r[0]); const uid = String(r[1]);
+      if (!clsPlans[name]) clsPlans[name] = {};
+      clsPlans[name][uid] = safeJsonParse(r[2]);
+    });
+
+    const allMyTasks = {};
+    fetchSheetData(ss, DB_SCHEMA.MyTasks.name).forEach(r => {
+      const name = String(r[1]);
+      if (!allMyTasks[name]) allMyTasks[name] = [];
+      allMyTasks[name].push({
+        taskId: String(r[0]), title: String(r[2]), desc: String(r[3]), time: Number(r[4]),
+        category: 'マイタスク', type: 'challenge', format: 'student', unitId: String(r[6] || '')
+      });
+    });
+
+    const json = JSON.stringify({ plans: clsPlans, myTasks: allMyTasks });
+    try { cache.put(cacheKey, json, 20); } catch (ignore) { /* 100KB超過時は素通し */ }
+    return createSuccessResponse({ json: json });
+  } catch (e) { return createErrorResponse(e); }
+}
+
+/**
  * 先生向け進捗スナップショットAPI（進捗一覧のライブ更新用）。
  * getData の clsProgress / clsFeedback と同じ集計を、この2シートだけ読んで返す。
  * これまで進捗一覧は画面を切り替えるまで更新されず、「授業中の見取り」に
