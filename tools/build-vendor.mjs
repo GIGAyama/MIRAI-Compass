@@ -59,12 +59,17 @@ const BANNER = (what) => `<!--
 // 2. アイコン（使っている分だけ SVG マスクにする）
 //
 //    bootstrap-icons をまるごと持つと CSS 98KB + woff2 131KB = 229KB になる。
-//    実際に使っているのは 53 種類しかないので、その SVG だけを取り出して
+//    実際に使っているのは全 2000 種類のうち一部だけなので、その SVG だけを取り出して
 //    mask-image にする。マークアップ（<i class="bi bi-compass-fill">）は変えない。
 //    background-color: currentColor なので text-danger などの色指定もそのまま効く。
+//
+//    ⚠️ srcFiles には「bi-* を書いている .html を全部」入れること。
+//       抜けたファイルのアイコンは CSS が出力されず、その画面だけ絵が消える
+//       （js_worksheet.html が抜けていて、ワークシート画面のツールバーが
+//        アイコン無しになっていた）。
 // ---------------------------------------------------------------------------
 {
-  const srcFiles = ['index.html', 'js_core.html', 'js_student.html', 'js_teacher.html'];
+  const srcFiles = ['index.html', 'js_core.html', 'js_student.html', 'js_teacher.html', 'js_worksheet.html'];
   const used = new Set();
   for (const f of srcFiles) {
     const t = read(join(ROOT, f));
