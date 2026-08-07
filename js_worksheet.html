@@ -22,12 +22,16 @@
  *   Worksheet.openStudent(task)        児童：回答画面を開く
  *   Worksheet.openTeacherEditor(task)  先生：作成・編集画面を開く
  *   Worksheet.openGrading(submission)  先生：添削画面を開く
+ *   Worksheet.openPeer(response)       児童：友だちの作品を読み取り専用で開く
  *   Worksheet.close()                  画面を閉じる
  *
- * ■ 見送り（この段では実装しない。壊れた参照は残さず「準備中」にする）
- *   - 児童「みんなの広場 / ギャラリー」（peer view）
- *   - mode=dashboard の一括管理画面
- *   - 4 タブのボトムナビ再構成
+ * ■ 統合後に追加された連携先（当初は見送っていたが、いまは実装済み）
+ *   - 児童「ひろば」（peer view）… js_student.html の renderStudentPlaza が
+ *     getSharedResponses / savePeerReaction を使い、閲覧は当モジュールの
+ *     openPeer（読み取り専用）を呼ぶ。
+ *   - ワークシート添削の一括管理画面 … js_teacher.html の 'dashboard' ビュー
+ *     （getDashboardData / generateBatchComments / batchSaveFeedback）。
+ *   - 児童の 4 タブのボトムナビ … js_student.html の STUDENT_NAV_TABS。
  * ============================================================
  */
 var Worksheet = (function () {
