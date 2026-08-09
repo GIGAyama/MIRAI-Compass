@@ -340,12 +340,14 @@ var Worksheet = (function () {
   }
 
   // 保存済み回答欄 HTML を書き戻す。
-  function restoreStudentAnswers(json) {
+  // rootEl を渡すと、その中の回答欄へ書き戻す（添削画面・ひろばは
+  // #worksheetContent ではなく別の入れ物に紙面を組み立てるため）。
+  function restoreStudentAnswers(json, rootEl) {
     if (!json) return;
     var arr;
     try { arr = (typeof json === 'string') ? JSON.parse(json) : json; } catch (e) { return; }
     if (!Array.isArray(arr)) return;
-    var ws = byId('worksheetContent');
+    var ws = rootEl || byId('worksheetContent');
     if (!ws) return;
     var nodes = ws.querySelectorAll(STUDENT_ANSWER_SELECTOR);
     for (var i = 0; i < nodes.length && i < arr.length; i++) {
@@ -1234,6 +1236,7 @@ var Worksheet = (function () {
       ? Server.callTeacher('getSubmissionDetail', submission.rowIndex).then(function (d) {
           submission.htmlContent = (d && d.htmlContent) || '';
           if (d && d.canvasJson && !submission.canvasJson) submission.canvasJson = d.canvasJson;
+          if (d && d.answersJson && !submission.answersJson) submission.answersJson = d.answersJson;
           return submission;
         })
       : Promise.resolve(submission);
@@ -1245,6 +1248,8 @@ var Worksheet = (function () {
         '<div id="gradingPaper" class="sheet"><div class="p-3">' + (s.htmlContent || '<div class="text-muted text-center py-5">この課題のワークシート本文が見つかりませんでした。</div>') + '</div></div>'
         + '<canvas id="gradingCanvas"></canvas>';
       activateWorksheetScripts(container);
+      // 児童が打ちこんだ答えを紙面に戻す（手書きだけでは答案が白紙に見える）
+      restoreStudentAnswers(s.answersJson, byId('gradingPaper'));
       byId('feedbackTextInput').value = s.feedbackText || '';
 
       setTimeout(function () {
@@ -1327,6 +1332,8 @@ var Worksheet = (function () {
       }
       ws.innerHTML = data.htmlContent;
       activateWorksheetScripts(ws);
+      // 友だちが打ちこんだ答えも見せる（手書きだけでは白紙に見える）
+      restoreStudentAnswers(response.studentAnswers, ws);
       // 完全に読み取り専用にする：編集不可・入力欄は無効・ポインタも殺す
       ws.contentEditable = 'false';
       ws.querySelectorAll('[contenteditable]').forEach(function (el) { el.contentEditable = 'false'; });

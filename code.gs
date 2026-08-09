@@ -1797,7 +1797,10 @@ function getSubmissionDetail(rowIndex) {
   var htmlContent = '';
   var found = wsSheet.getRange('A:A').createTextFinder(taskId).matchEntireCell(true).findNext();
   if (found) htmlContent = wsSheet.getRange(found.getRow(), WS_COL_HTML_CONTENT).getValue();
-  return { canvasJson: safeJSONParse(canvasJson), htmlContent: htmlContent };
+  // 児童がキーボードで打った回答（P列）。これを返さないと、手書きしなかった子の
+  // 答案が添削画面で白紙に見えてしまう。
+  var answersJson = resSheet.getRange(rowIndex, RS_COL_ANSWERS_JSON).getValue();
+  return { canvasJson: safeJSONParse(canvasJson), htmlContent: htmlContent, answersJson: answersJson || '' };
 }
 
 // 全提出データ + ワークシート一覧を一括取得（先生用管理画面）。先生専用。
@@ -1893,6 +1896,9 @@ function getSharedResponses(taskId) {
         studentName: row[3],
         canvasImage: row[5],
         canvasJson: row[11],
+        // 打ちこんだ回答も渡す。手書きだけを渡すと、キーボードで書いた子の
+        // 作品が「ひろば」では白紙に見える。
+        studentAnswers: row[RS_COL_ANSWERS_JSON - 1] || '',
         reactions: ensureArray(safeJSONParse(row[13]))
       });
     }
