@@ -164,7 +164,7 @@ function openWorksheetSubmissions(taskId) {
       var when = s.submittedAt ? new Date(s.submittedAt).toLocaleString() : '';
       return '<button type="button" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" '
         + 'data-ws-sub="' + i + '">'
-        + '<span class="fw-bold text-truncate">' + escapeHtml(s.studentName || '名無し') + '</span>'
+        + '<span class="fw-bold text-truncate student-name">' + escapeHtml(s.studentName || '名無し') + '</span>'
         + '<span class="d-flex align-items-center gap-2">' + badge + '<small class="text-muted">' + escapeHtml(when) + '</small></span>'
         + '</button>';
     }).join('');
@@ -619,7 +619,7 @@ function renderLiveCards(container, students) {
       return `
       <div class="col">
         <div data-key="${escapeHtml(s.key)}" class="live-card card h-100 text-center p-3 shadow-sm border-0 rounded-4 ${isSos ? 'sos-alert bg-light-danger border-danger' : ''} ${isFocus ? 'border-info' : ''}" style="opacity: ${opacity}">
-          <div class="fw-bold text-truncate mb-2">${escapeHtml(s.name)}</div>
+          <div class="fw-bold text-truncate mb-2 student-name">${escapeHtml(s.name)}</div>
           <i class="bi bi-person-circle fs-1 my-2 ${isSos ? 'text-danger' : (isFocus ? 'text-info' : 'text-secondary')}"></i>
           <div class="small text-muted text-truncate task-text">${taskDisplay}</div>
           <div class="badge bg-light text-muted mt-1 fw-normal mode-badge">${escapeHtml(s.mode || '通常')}</div>
@@ -661,7 +661,7 @@ function renderHeatmap(container, students) {
     const ic = isSos ? '<i class="bi bi-exclamation-circle-fill text-danger ms-1 animate__animated animate__flash"></i>' : (isFocus ? '<i class="bi bi-lightning-fill text-info ms-1"></i>' : '');
 
     // 生徒名クリックでポートフォリオ表示（正準キーで本人のデータを引く）
-    h += `<tr><td class="text-start fw-bold text-truncate" role="button" tabindex="0" style="max-width:120px;cursor:pointer;text-decoration:underline" onclick="renderPortfolioModal('${escJs(key)}', true, '${escJs(n)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); renderPortfolioModal('${escJs(key)}', true, '${escJs(n)}');}">${escapeHtml(n)}${ic}</td>`;
+    h += `<tr><td class="text-start fw-bold text-truncate student-name" role="button" tabindex="0" style="max-width:120px;cursor:pointer;text-decoration:underline" onclick="renderPortfolioModal('${escJs(key)}', true, '${escJs(n)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault(); renderPortfolioModal('${escJs(key)}', true, '${escJs(n)}');}">${escapeHtml(n)}${ic}</td>`;
 
     currentTasks.forEach(t => {
       const p = (dataStore.clsProgress[key] && dataStore.clsProgress[key][t.taskId]) || {};
@@ -751,7 +751,7 @@ function renderSeatingView(container) {
     
     card.innerHTML = `
       <div class="card-body p-2 text-center" style="cursor: move;" onmousedown="startDragSeat(event, this)" ontouchstart="startDragSeat(event, this)">
-        <div class="fw-bold text-truncate small mb-1">${escapeHtml(s.name)}</div>
+        <div class="fw-bold text-truncate small mb-1 student-name">${escapeHtml(s.name)}</div>
         <i class="bi bi-person-circle fs-3 ${isSos ? 'text-danger' : (isFocus ? 'text-info' : 'text-secondary')}"></i>
         <div class="x-small text-muted text-truncate mt-1">${escapeHtml(s.task || '-')}</div>
       </div>
@@ -992,7 +992,7 @@ function renderSummaryListView(container) {
       <tr>
         <td class="st-col-name text-center text-muted small align-middle">${index + 1}</td>
         <td class="st-col-name align-middle">
-          <div class="fw-bold text-primary" style="cursor:pointer;" onclick="renderPortfolioModal('${escJs(s.key)}', true, '${escJs(s.name)}')">
+          <div class="fw-bold text-primary student-name" style="cursor:pointer;" onclick="renderPortfolioModal('${escJs(s.key)}', true, '${escJs(s.name)}')">
             ${escapeHtml(s.name)} <i class="bi bi-box-arrow-up-right small ms-1 text-muted"></i>
           </div>
         </td>
@@ -1360,7 +1360,7 @@ function renderDashboardGrid() {
       + 'style="width:100%;cursor:pointer" '
       + 'title="' + escapeHtml(s.studentName || '名無し') + ' さんの提出を開く">'
       + thumb
-      + '<div class="mt-2 fw-bold text-truncate">' + escapeHtml(s.studentName || '名無し') + '</div>'
+      + '<div class="mt-2 fw-bold text-truncate student-name">' + escapeHtml(s.studentName || '名無し') + '</div>'
       + '<div class="d-flex flex-wrap gap-1 mt-1">' + badge + hasComment + '</div>'
       + (when ? '<div class="small text-muted mt-1">' + escapeHtml(when) + '</div>' : '')
       + '</button>';
@@ -1422,7 +1422,7 @@ function openDashboardDetail(rowIndex) {
   panel.setAttribute('tabindex', '-1');
   panel.innerHTML =
     '<div class="d-flex justify-content-between align-items-center mb-2">'
-    + '  <h6 class="fw-bold m-0">' + escapeHtml(s.studentName || '名無し') + ' さん ' + badge + '</h6>'
+    + '  <h6 class="fw-bold m-0"><span class="student-name">' + escapeHtml(s.studentName || '名無し') + '</span> さん ' + badge + '</h6>'
     + '  <button type="button" class="btn-close" aria-label="閉じる" onclick="closeDashboardDetail()"></button>'
     + '</div>'
     + thumb
