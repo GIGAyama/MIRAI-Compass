@@ -1929,6 +1929,88 @@ function savePeerReaction(data) {
   }
 }
 
+/* ---------- AI 連携：個人情報の仮名化 ---------- */
+
+// AI（Gemini）に送る文章から連絡先を消すためのパターン。
+const AI_EMAIL_PATTERN  = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+const AI_PHONE_PATTERN  = /(?:\+?81[-\s]?)?0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{3,4}/g;
+const AI_POSTAL_PATTERN = /〒?\s?\d{3}-\d{4}/g;
+
+// 正規表現で特別な意味を持つ記号を打ち消す（名前に記号が入っていても壊れないように）。
+function escapeRegExp_(value) {
+  return String(value == null ? '' : value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// 名前から空白（半角・全角）を取り除く。「山田 太郎」と「山田太郎」を同じ名前として扱うため。
+function compactName_(value) {
+  return String(value == null ? '' : value).replace(/[\s　]/g, '');
+}
+
+// メールアドレス・電話番号・郵便番号を伏せ字にする。
+// 児童の自由記述に連絡先が書かれていても、そのまま外部に出さないための最後の砦。
+function maskContactInfo_(value) {
+  return String(value == null ? '' : value)
+    .replace(AI_EMAIL_PATTERN, '[メールアドレス]')
+    .replace(AI_PHONE_PATTERN, '[電話番号]')
+    .replace(AI_POSTAL_PATTERN, '[郵便番号]');
+}
+
+// 児童名 → 仮名（児童A・児童B…）の対応表を作る。
+// aliases は送信前の置き換え用、reverse は返答を実名に戻す用。
+function createStudentAliases_(names) {
+  const aliases = {};
+  const reverse = {};
+  let seq = 0;
+  (names || []).forEach(function (rawName) {
+    const name = String(rawName == null ? '' : rawName).trim();
+    if (!name || aliases[name]) return; // 空欄と同名の重複は飛ばす
+    const alias = '児童' + String.fromCharCode(65 + (seq % 26)) + (seq >= 26 ? Math.floor(seq / 26) : '');
+    aliases[name] = alias;
+    reverse[alias] = name;
+    seq++;
+  });
+  return { aliases: aliases, reverse: reverse };
+}
+
+// AI に送る文章から個人情報を消す。児童名は仮名へ、連絡先は伏せ字へ。
+function redactSensitiveText_(value, aliases) {
+  let text = String(value == null ? '' : value);
+  const map = aliases || {};
+  // 長い名前から先に置き換える（「山田」だけ先に消えて「山田太郎」が崩れるのを防ぐ）。
+  Object.keys(map).sort(function (a, b) { return b.length - a.length; }).forEach(function (name) {
+    text = text.replace(new RegExp(escapeRegExp_(name), 'g'), map[name]);
+    const compact = compactName_(name);
+    if (compact && compact !== name) {
+      text = text.replace(new RegExp(escapeRegExp_(compact), 'g'), map[name]);
+    }
+  });
+  return maskContactInfo_(text);
+}
+
+// AI の返答に含まれる仮名を実名に戻す。
+// 児童A と 児童A1 が混ざっても崩れないよう、長い仮名から戻す。
+function rehydrateAliases_(value, reverseAliases) {
+  let text = String(value == null ? '' : value);
+  const map = reverseAliases || {};
+  Object.keys(map).sort(function (a, b) { return b.length - a.length; }).forEach(function (alias) {
+    text = text.replace(new RegExp(escapeRegExp_(alias), 'g'), map[alias]);
+  });
+  return text;
+}
+
+// 名簿（StudentRoster）に載っている児童名をすべて返す（内部関数）。
+// 提出者以外の名前が自由記述に書かれていても仮名化できるようにするため。
+function getRosterStudentNames_(ss) {
+  try {
+    return fetchSheetData(ss, DB_SCHEMA.StudentRoster.name)
+      .map(function (r) { return String(r[3] || '').trim(); })
+      .filter(function (name) { return !!name; });
+  } catch (e) {
+    Logger.log('名簿の読み込みに失敗（仮名化は提出者名のみで続行）: ' + e.message);
+    return [];
+  }
+}
+
 /* ---------- AI 連携（Gemini API） ---------- */
 
 // Gemini API を呼び出しテキストを返す（内部関数）。キーは x-goog-api-key ヘッダで送る。
@@ -1967,11 +2049,13 @@ function callGeminiAPI(prompt) {
 // どの教科・どの単元でも最適な紙面になるよう、「分析→設計→教科別最適化→実装→セルフチェック」
 // の思考手順を AI に踏ませる構成にしている。レイアウト構造・CSSクラスはアプリ側の契約なので変更しないこと。
 function buildWorksheetPrompt(data) {
-  var grade       = data.grade       || '';
-  var unitName    = data.unitName    || '';
-  var stepTitle   = data.stepTitle   || '';
-  var description = data.description || '';
-  var ocrContext  = data.ocrContext  || '';
+  // AI に送る前に、メール・電話番号・郵便番号を伏せ字にしておく。
+  // 参考資料テキスト（OCR）に名簿や連絡先が紛れ込むことがあるため。
+  var grade       = maskContactInfo_(data.grade       || '');
+  var unitName    = maskContactInfo_(data.unitName    || '');
+  var stepTitle   = maskContactInfo_(data.stepTitle   || '');
+  var description = maskContactInfo_(data.description || '');
+  var ocrContext  = maskContactInfo_(data.ocrContext  || '');
 
   var ocrSection = '';
   if (ocrContext) {
@@ -2105,10 +2189,25 @@ function buildWorksheetPrompt(data) {
     + '5. 指定のレイアウト構造を守り、タグの閉じ忘れ・外部リソース参照がないか。\n';
 }
 
+// ワークシート生成に渡す入力から、名簿の児童名を仮名に置き換える（内部関数）。
+// 参考資料テキスト（OCR）に名簿が写り込んでいても実名を送らないようにするため。
+// ワークシートは実名を書き戻す必要がないので、仮名のままにしておく。
+function sanitizeWorksheetInput_(data) {
+  var input = data || {};
+  var aliasMap = createStudentAliases_(getRosterStudentNames_(getSpreadsheet()));
+  var sanitized = {};
+  Object.keys(input).forEach(function (key) {
+    sanitized[key] = (typeof input[key] === 'string')
+      ? redactSensitiveText_(input[key], aliasMap.aliases)
+      : input[key];
+  });
+  return sanitized;
+}
+
 // 統一プロンプトでワークシートHTMLを生成（クリーニング済み文字列を返す）。先生専用。
 function generateSingleWorksheet(data) {
   MiraiAuth.requireTeacher();
-  var prompt = buildWorksheetPrompt(data);
+  var prompt = buildWorksheetPrompt(sanitizeWorksheetInput_(data));
   var result = callGeminiAPI(prompt);
   result = result
     .replace(/```html/gi, '').replace(/```/g, '')
@@ -2122,16 +2221,18 @@ function generateSingleWorksheet(data) {
 // クライアント側にプロンプトの複製を持たせない（内容が乖離しない）ためのAPI。
 function getWorksheetPromptForManualAI(data) {
   MiraiAuth.requireTeacher();
-  return buildWorksheetPrompt(data || {});
+  return buildWorksheetPrompt(sanitizeWorksheetInput_(data || {}));
 }
 
 // AIでルーブリック（評価基準表）を生成。先生専用。
 function generateRubricAI(data) {
   MiraiAuth.requireTeacher();
+  // 単元名や活動内容にも連絡先や児童名が入りうるので、送る前に仮名化・伏せ字にする。
+  var rubricInput = sanitizeWorksheetInput_(data);
   var prompt = '教育評価専門家としてルーブリック作成。'
-    + '単元:' + data.unitName
-    + ',活動:' + data.stepTitle
-    + ',内容:' + data.description
+    + '単元:' + rubricInput.unitName
+    + ',活動:' + rubricInput.stepTitle
+    + ',内容:' + rubricInput.description
     + '。3観点3段階,HTMLテーブル形式(table table-bordered),具体的記述。HTMLのみ。';
   return callGeminiAPI(prompt);
 }
@@ -2171,18 +2272,28 @@ function generateBatchComments(taskId) {
     return { comments: [], taskTitle: stepTitle };
   }
 
+  // 個人情報の仮名化：Gemini には実名を送らず「児童A」「児童B」…で送る。
+  // 名簿の児童名もまとめて対応表に入れて、自由記述に書かれた友達の名前も消えるようにする。
+  var aliasMap = createStudentAliases_(
+    submissions.map(function (s) { return s.studentName; })
+      .concat(getRosterStudentNames_(ss))
+  );
+
   var studentLines = submissions.map(function (s, idx) {
-    var line = (idx + 1) + '. ' + s.studentName + ' | 自己評価: ' + (s.textContent || '未記入');
-    if (s.reflection) line += ' | ふりかえり: ' + s.reflection;
+    var alias = aliasMap.aliases[String(s.studentName).trim()] || '児童';
+    var line = (idx + 1) + '. ' + alias
+      + ' | 自己評価: ' + (redactSensitiveText_(s.textContent, aliasMap.aliases) || '未記入');
+    if (s.reflection) line += ' | ふりかえり: ' + redactSensitiveText_(s.reflection, aliasMap.aliases);
     return line;
   }).join('\n');
 
   var prompt = 'あなたは経験豊富なベテラン小学校教師です。\n'
     + '以下の授業で提出された児童のワークシートに対して、一人ひとりに温かいコメントを書いてください。\n\n'
     + '【授業情報】\n'
-    + '単元: ' + unitName + '\n'
-    + '授業: ' + stepTitle + '\n\n'
+    + '単元: ' + maskContactInfo_(unitName) + '\n'
+    + '授業: ' + maskContactInfo_(stepTitle) + '\n\n'
     + '【コメントのルール】\n'
+    + '- 児童は「児童A」「児童B」のような仮名で示している。コメントの中では仮名をそのまま使う\n'
     + '- 児童の自己評価やふりかえりの内容に基づいて、個別化されたコメントを書く\n'
     + '- 学習の成果や成長を具体的に認め、児童が達成感を感じられるようにする\n'
     + '- 次の授業に向けたアドバイスや励ましを含める\n'
@@ -2214,6 +2325,8 @@ function generateBatchComments(taskId) {
     for (var j = 0; j < parsed.length; j++) {
       if (parsed[j].index === idx + 1) { aiComment = parsed[j].comment || ''; break; }
     }
+    // 仮名のまま返ってくるので、先生に見せる前に実名へ戻す。
+    aiComment = rehydrateAliases_(aiComment, aliasMap.reverse);
     return {
       rowIndex: s.rowIndex,
       studentName: s.studentName,
