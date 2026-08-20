@@ -14,7 +14,7 @@ docs/note/
 1. **連載番号**。タイトル行の `#◯` を実際の番号に置きかえてください。推測で埋めると連載が壊れるので、こちらでは埋めていません。
 2. **公開先の URL**。本文の「はじめに」に置いてあるのは
    `https://github.com/GIGAyama/MIRAI-Compass` です。読み手に渡したいのが
-   GitHub Pages のシェル（`https://gigayama.github.io/MIRAI-Compass/`）なら、そちらに差しかえてください。
+   GitHub Pages のシェル（`https://mirai-compass.giga-school.com/`）なら、そちらに差しかえてください。
    Pages が有効になっているかは Settings > Pages で確かめられます。
 3. **前作への言及**。「✍️ ワークシートも、このアプリの中で配って返せます」の冒頭に
    「以前この連載で紹介した『みらいパスポート』」と書いてあります。
