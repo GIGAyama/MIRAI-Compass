@@ -411,12 +411,17 @@ export function buildChecks(cfg) {
 
     // ---------------- E. PWA ----------------
     {
-      id: 'E1_MANIFEST_PATHS', title: 'manifest の id/scope/start_url がリポジトリ名の絶対パス',
+      id: 'E1_MANIFEST_PATHS', title: 'manifest の id/scope/start_url が配信場所と合っている',
       run: ({ root }) => {
         const f = `${SHELL}/manifest.webmanifest`;
         if (!has(root, f)) return { ok: false, detail: 'manifest が無い' };
         const m = JSON.parse(read(root, f));
-        const want = `/${REPO}/`;
+        // 独自ドメイン（CNAME あり）ではアプリはドメイン直下に置かれるので "/"。
+        // 旧構成（gigayama.github.io/MIRAI-Compass/）のリポジトリ名の絶対パスを
+        // 残すと、scope がページの URL を含まなくなって manifest ごと無視され、
+        // PWA としてインストールできなくなる。実際にその状態で残っていた。
+        const hasCname = has(root, 'CNAME') || has(root, `${SHELL}/CNAME`);
+        const want = hasCname ? '/' : `/${REPO}/`;
         const bad = ['id', 'start_url', 'scope'].filter((k) => m[k] !== want);
         return {
           ok: bad.length === 0,

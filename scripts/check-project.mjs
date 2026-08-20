@@ -96,7 +96,7 @@ async function selfTest() {
     ['D11_FORCED_COLORS', (d) => { for (const f of ['css.html', 'docs/index.html', 'docs/offline.html']) patch(d, f, (s) => s.replace(/forced-colors: active/g, 'forced-colours: active')); }],
     ['D13_PRINT_CSS', (d) => patch(d, 'css.html', (s) => s.replace(/@media print/g, '@media screenonly'))],
     ['F4_RT_COLOR', (d) => patch(d, 'css.html', (s) => s.replace(/color: inherit; \}/, 'color: #6c757d; }'))],
-    ['E1_MANIFEST_PATHS', (d) => patch(d, 'docs/manifest.webmanifest', (s) => s.replace(/"id": "[^"]*"/, '"id": "./"'))],
+    ['E1_MANIFEST_PATHS', (d) => patch(d, 'docs/manifest.webmanifest', (s) => s.replace(/"id": "[^"]*"/, '"id": "/MIRAI-Compass/"'))],
     ['E2_APPLE_ICON_OPAQUE', (d) => cpSync(join(d, 'docs/icons/icon-192.png'), join(d, 'docs/icons/apple-touch-icon.png'))],
     ['E3_INSTALL_HOOK', (d) => patch(d, 'docs/index.html', (s) => s.replace('<script src="install-hook.js"></script>', ''))],
     ['E5_SW_CACHE_SCOPE', (d) => patch(d, 'docs/sw.js', (s) => s.replace(/\.filter\(\(k\) => k\.startsWith\(CACHE_PREFIX\) && k !== CACHE_VERSION\)/, ''))],
