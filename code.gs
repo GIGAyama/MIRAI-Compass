@@ -1963,7 +1963,9 @@ function createStudentAliases_(names) {
   let seq = 0;
   (names || []).forEach(function (rawName) {
     const name = String(rawName == null ? '' : rawName).trim();
-    if (!name || aliases[name]) return; // 空欄と同名の重複は飛ばす
+    // 1文字の名前は普通の言葉と衝突する（「光」「愛」等が本文の一般語まで
+    // 置き換わり、実名も守れず本文も壊れる）ため対象外にする。
+    if (name.length < 2 || aliases[name]) return; // 空欄・1文字・同名の重複は飛ばす
     const alias = '児童' + String.fromCharCode(65 + (seq % 26)) + (seq >= 26 ? Math.floor(seq / 26) : '');
     aliases[name] = alias;
     reverse[alias] = name;
@@ -1980,7 +1982,7 @@ function redactSensitiveText_(value, aliases) {
   Object.keys(map).sort(function (a, b) { return b.length - a.length; }).forEach(function (name) {
     text = text.replace(new RegExp(escapeRegExp_(name), 'g'), map[name]);
     const compact = compactName_(name);
-    if (compact && compact !== name) {
+    if (compact.length >= 2 && compact !== name) {
       text = text.replace(new RegExp(escapeRegExp_(compact), 'g'), map[name]);
     }
   });
