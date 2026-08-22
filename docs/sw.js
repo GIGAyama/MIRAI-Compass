@@ -18,7 +18,11 @@
  *   キャッシュまで巻き添えで消え、それらがオフラインで起動しなくなっていた。
  */
 const CACHE_PREFIX = 'mirai-compass-shell-';
-const APP_VERSION = 'v3';   // ← リリースごとに必ず上げる
+// ⚠️ この行は手で直さない。tools/build-sw.mjs が先読み対象の中身から書き換える。
+//    手書きだったころは「リリースごとに必ず上げる」が人の仕事で、
+//    2026-08-21 に12リポジトリで同時に上げ忘れる事故が起きた。上げ忘れると
+//    古いシェルのキャッシュが掃除されず、直した画面が端末に一度も届かない。
+const APP_VERSION = 'vc970240a'; /* __APP_VERSION__ */
 const CACHE_VERSION = CACHE_PREFIX + APP_VERSION;
 
 // キャッシュするシェル資産（すべて相対パス = GitHub Pages のサブパス配信に対応）
