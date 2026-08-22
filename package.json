@@ -9,7 +9,13 @@
     "build": "node tools/build-vendor.mjs",
     "check": "node scripts/check-project.mjs",
     "test": "node --test tests/**/*.test.mjs",
-    "ci": "npm run build && node tools/verify-generated.mjs && npm run check && npm test"
+    "ci": "npm run build && node tools/verify-generated.mjs && npm run check && npm test",
+    "gas:install": "npm install --no-save --no-package-lock --no-audit --no-fund @google/clasp@3.3.0",
+    "gas:login": "node scripts/gas-deploy.mjs login",
+    "gas:status": "node scripts/gas-deploy.mjs status",
+    "gas:backup": "node scripts/gas-deploy.mjs backup",
+    "gas:push": "node scripts/gas-deploy.mjs push",
+    "deploy": "node scripts/gas-deploy.mjs deploy"
   },
   "dependencies": {
     "bootstrap": "5.3.0",
