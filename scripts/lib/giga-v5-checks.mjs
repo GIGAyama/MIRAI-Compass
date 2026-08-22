@@ -542,12 +542,27 @@ export function buildChecks(cfg) {
       },
     },
     {
-      id: 'E11_APP_VERSION', title: 'APP_VERSION が sw.js にある',
+      id: 'E11_APP_VERSION', title: 'APP_VERSION が自動生成されている',
+      // 以前は「APP_VERSION という行があるか」しか見ていなかった。
+      // 手書きの版は上げ忘れても行はあるので、いつでも緑だった。
+      // 2026-08-21 に12リポジトリで同時に上げ忘れる事故が起きたのがその形。
+      // いまは tools/build-sw.mjs が先読み対象の中身から版を作るので、
+      // 見るべきは「目印が残っているか」と「生成器が配線されているか」になった。
       run: ({ root }) => {
         const f = `${SHELL}/sw.js`;
         if (!has(root, f)) return { ok: false, detail: 'sw.js が無い' };
-        const m = read(root, f).match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
-        return { ok: !!m, detail: m ? m[1] : '無い' };
+        const raw = read(root, f);
+        if (!/const APP_VERSION = '[^']*'; \/\* __APP_VERSION__ \*\//.test(raw)) {
+          return { ok: false, detail: "手書きに戻っている。const APP_VERSION = 'v0'; /* __APP_VERSION__ */ の形にして、版は tools/build-sw.mjs に作らせること" };
+        }
+        if (!has(root, 'tools/build-sw.mjs')) {
+          return { ok: false, detail: 'tools/build-sw.mjs がありません。版の自動生成が外れています' };
+        }
+        if (!/build-sw\.mjs/.test(read(root, 'package.json') || '')) {
+          return { ok: false, detail: 'package.json が tools/build-sw.mjs を呼んでいません。版が据え置きのまま配られます' };
+        }
+        const m = raw.match(/APP_VERSION\s*=\s*'([^']+)'/);
+        return { ok: true, detail: `${m ? m[1] : ''}（配信物の中身から自動生成）` };
       },
     },
     {
