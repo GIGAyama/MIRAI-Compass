@@ -2024,27 +2024,14 @@ function callGeminiAPI(prompt) {
   if (!apiKey) {
     throw new Error('Gemini APIキーが設定されていません。先生モードの設定を確認してください。');
   }
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + getGeminiModelName_() + ':generateContent';
-  var payload = { contents: [{ parts: [{ text: prompt }] }] };
-  var options = {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'x-goog-api-key': apiKey },
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
-  var res = UrlFetchApp.fetch(url, options);
-  var json = JSON.parse(res.getContentText());
-  if (json.error) {
-    throw new Error('AIエラー: ' + json.error.message);
-  }
-  if (!json.candidates || !json.candidates.length ||
-      !json.candidates[0].content ||
-      !json.candidates[0].content.parts ||
-      !json.candidates[0].content.parts.length) {
-    throw new Error('AIから応答が得られませんでした。');
-  }
-  return json.candidates[0].content.parts[0].text;
+  // 通信・再試行・応答の取り出しは正本 Gemini.gs（GigaGemini）に任せる。
+  // ここに直書きしていた頃は再試行が無く、Gemini が混み合う時間帯（429）に
+  // ワークシート生成がそのまま失敗していた。
+  return GigaGemini.call({
+    apiKey: apiKey,
+    prompt: prompt,
+    model: getGeminiModelName_()
+  });
 }
 
 // 統一ワークシート生成プロンプトを構築する（純関数）。
