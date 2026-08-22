@@ -18,26 +18,33 @@
  *   node scripts/check-project.mjs             検査する
  *   node scripts/check-project.mjs --self-test 検査そのものが動くか確かめる
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { buildChecks } from './lib/giga-v5-checks.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const cfg = JSON.parse(readFileSync(join(ROOT, 'quality.config.json'), 'utf8'));
 
-/** フリート共通の正本があれば読み込む（無ければ Part I の検査だけで走る）。 */
-async function loadShared() {
-  const p = join(ROOT, 'scripts', 'lib', 'project-quality.mjs');
-  if (!existsSync(p)) return [];
-  const m = await import(pathToFileURL(p).href);
-  return typeof m.buildChecks === 'function' ? m.buildChecks(cfg) : [];
-}
-
 const GREEN = '\x1b[32m', RED = '\x1b[31m', DIM = '\x1b[2m', OFF = '\x1b[0m';
 
+// かつてここで、フリート共通の正本 scripts/lib/project-quality.mjs を
+// 「あれば足す、無ければ Part I の検査だけ」で読んでいた。外した理由
+// （2026-08-22 に実測）:
+//
+//   ・その正本は一度も取り込まれず、**何の知らせも出さないまま**素通り
+//     していた。含まれていた秘密の直書きの検査も働いていなかった。
+//   ・しかも取り込めば動く、というものでもなかった。この枝は
+//     m.buildChecks を探すが、艦隊にある8本のコピーはどれもその名前を
+//     export していない（6本が runQualityChecks、1本が run）。実際に
+//     gamification のコピーを置いて走らせても、検査は 38 件のまま
+//     1件も増えなかった。
+//
+// 秘密の直書きは tools/check-secrets.mjs が見る（#26 で入れた）。あちらは
+// 丸ごと1ファイルで完結し、無ければコマンドごと失敗するので、
+// 「取り込み忘れたまま緑」にはならない。
 async function run(root) {
-  const checks = [...await loadShared(), ...buildChecks(cfg)];
+  const checks = buildChecks(cfg);
   const results = [];
   for (const c of checks) {
     let r;
