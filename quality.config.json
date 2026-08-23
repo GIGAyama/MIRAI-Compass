@@ -1,28 +1,86 @@
 {
-  "repoName": "MIRAI-Compass",
-  "shellDir": "docs",
-
-  "appHtmlFiles": ["index.html"],
-  "shellHtmlFiles": ["docs/index.html", "docs/offline.html"],
-
-  "viewportFiles": ["index.html", "code.gs", "docs/index.html", "docs/offline.html"],
-
-  "styleFiles": ["css.html", "docs/index.html", "docs/offline.html"],
-
-  "sourceFiles": [
-    "code.gs",
-    "index.html",
-    "css.html",
-    "js_core.html",
-    "js_student.html",
-    "js_teacher.html",
-    "js_worksheet.html",
-    "docs/index.html",
-    "docs/app.js",
-    "docs/install-hook.js",
-    "docs/sw.js",
-    "docs/offline.html"
-  ],
-
-  "generatedFiles": ["vendor_css.html", "vendor_icons.html", "vendor_js.html"]
+  "//": "このリポジトリの品質ゲートの設定。standard は正本へ、それ以外は scripts/lib/local-checks.mjs へ渡す。",
+  "standard": {
+    "//": "正本 GIGAyama.github.io/standards/lib/giga-v5-checks.mjs に渡す設定。",
+    "repoName": "MIRAI-Compass",
+    "sw": "static",
+    "swSource": "docs/sw.js",
+    "swVersionConst": "APP_VERSION",
+    "//swBuilder": "このリポジトリは版を刻む道具を tools/ に置いている（既定と同じだが、明示しておく）",
+    "swBuilder": "tools/build-sw.mjs",
+    "manifest": "docs/manifest.webmanifest",
+    "//entryHtml": "GitHub Pages を docs/ から配るので、入口は docs/index.html。CSP・viewport・インライン script はこの1枚だけを見る（GAS 側の js_*.html は「インライン script」が正しい形なので、混ぜると誤検知する）",
+    "entryHtml": "docs/index.html",
+    "siteRoot": "docs",
+    "jsDirs": [
+      "docs"
+    ],
+    "cssDirs": [
+      "docs"
+    ],
+    "//htmlFiles": "GAS 本体の画面も入れる。表示の検査（safe-area / clamp / reduced-motion / forced-colors / rt の色 / 100vh）は <style> の中身を見るので、ここに入れないと先生と児童が実際に見る画面を1枚も見ないことになる。index.html は GAS のテンプレート、css.html はその CSS",
+    "htmlFiles": [
+      "docs/index.html",
+      "docs/offline.html",
+      "index.html",
+      "css.html"
+    ],
+    "//imageDirs": "アイコンだけを見る。docs/note/images は note の記事に載せる画像で、アプリが配るものではない",
+    "imageDirs": [
+      "docs/icons"
+    ],
+    "//allowedRemoteScripts": "本文の書体に Google Fonts をつかっている。読めなくても CSS の代替に落ちるだけで画面は出る。艦隊の先例（Reversi・Shiritori_fighter・KAKE_Master）と同じ扱い",
+    "allowedRemoteScripts": [
+      "^https://fonts\\.googleapis\\.com(/|$)",
+      "^https://fonts\\.gstatic\\.com(/|$)"
+    ],
+    "skips": [
+      {
+        "id": "C_PAGEHIDE",
+        "reason": "docs/ は入口のシェルで、記録を持たない。入力欄は GAS アプリの URL 1つだけで、［ほぞん］を押したその場で localStorage に書いている。締めて確定する作業中の記録が無いので pagehide の出番が無い（児童の書いたものは iframe の中の GAS 本体が保存する）（2026-08-23）"
+      }
+    ]
+  },
+  "local": {
+    "//": "GAS 本体（code.gs と *.html の画面）を見る、このリポジトリだけの検査に渡す設定。正本は PWA のシェルを見る作りで、GAS のテンプレートは見られない。",
+    "repoName": "MIRAI-Compass",
+    "shellDir": "docs",
+    "appHtmlFiles": [
+      "index.html"
+    ],
+    "shellHtmlFiles": [
+      "docs/index.html",
+      "docs/offline.html"
+    ],
+    "viewportFiles": [
+      "index.html",
+      "code.gs",
+      "docs/index.html",
+      "docs/offline.html"
+    ],
+    "styleFiles": [
+      "css.html",
+      "docs/index.html",
+      "docs/offline.html"
+    ],
+    "sourceFiles": [
+      "code.gs",
+      "index.html",
+      "css.html",
+      "js_core.html",
+      "js_student.html",
+      "js_teacher.html",
+      "js_worksheet.html",
+      "docs/index.html",
+      "docs/app.js",
+      "docs/install-hook.js",
+      "docs/sw.js",
+      "docs/offline.html"
+    ],
+    "generatedFiles": [
+      "vendor_css.html",
+      "vendor_icons.html",
+      "vendor_js.html"
+    ]
+  }
 }
