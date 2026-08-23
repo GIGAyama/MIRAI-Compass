@@ -39,7 +39,7 @@ jobs:
       # ★ 「0件でした」だけでは、検査が動いているのか
       #   何も見ていないのか区別できない。わざと壊して落ちることを確かめる。
       - name: 品質ゲートそのものが動くか（わざと壊す）
-        run: node scripts/check-project.mjs --self-test
+        run: npm run check:self
 
       - name: 中核ロジックのテスト
         run: npm test
