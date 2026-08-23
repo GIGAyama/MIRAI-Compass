@@ -97,6 +97,9 @@ npm run build      # vendor_css.html / vendor_icons.html / vendor_js.html を生
 - [ ] `https://<ユーザー名>.github.io/MIRAI-Compass/` を開き、GAS の `/exec` URL を設定。
 - [ ] Chrome の「インストール」から**アプリとしてインストール**でき、独立ウィンドウで起動する。
 - [ ] オフライン時に `offline.html` が出る。
+- [ ] `/privacy.html` と `/terms.html` が開く（配信物は `docs/` なので、法務ページも
+      `docs/` に置かないと 404 になる。リポジトリ直下に置いても配信されない）。
+- [ ] 設定画面の下に「利用規約 / プライバシーポリシー」のリンクが出ている。
 
 ---
 
