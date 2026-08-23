@@ -22,7 +22,7 @@ const CACHE_PREFIX = 'mirai-compass-shell-';
 //    手書きだったころは「リリースごとに必ず上げる」が人の仕事で、
 //    2026-08-21 に12リポジトリで同時に上げ忘れる事故が起きた。上げ忘れると
 //    古いシェルのキャッシュが掃除されず、直した画面が端末に一度も届かない。
-const APP_VERSION = 'vc970240a'; /* __APP_VERSION__ */
+const APP_VERSION = 'v40f4f453'; /* __APP_VERSION__ */
 const CACHE_VERSION = CACHE_PREFIX + APP_VERSION;
 
 // キャッシュするシェル資産（すべて相対パス = GitHub Pages のサブパス配信に対応）
@@ -32,6 +32,8 @@ const SHELL_ASSETS = [
   './app.js',
   './install-hook.js',
   './offline.html',
+  './privacy.html',
+  './terms.html',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -86,7 +88,11 @@ self.addEventListener('fetch', (event) => {
       try {
         return await fetch(req);
       } catch {
-        return (await caches.match('./index.html'))
+        // ★ まず「開こうとした画面そのもの」を探す。
+        //   ここを飛ばして index.html に落とすと、圏外で
+        //   privacy.html を開いても入口シェルが出てしまう。
+        return (await caches.match(req, { ignoreSearch: true }))
+            || (await caches.match('./index.html'))
             || (await caches.match('./offline.html'))
             || Response.error();
       }

@@ -114,6 +114,8 @@ GAS に貼り付けるファイルは **10 個**です（`code.gs` ＋ `.html` 9
     ├── app.js                # シェルのロジック（CSP のため外部ファイル）
     ├── install-hook.js       # beforeinstallprompt の捕捉（head 最上部）
     ├── offline.html          # 圏外のときに出る画面
+    ├── privacy.html          # プライバシーポリシー（配信物に入れる。GAS には送らない）
+    ├── terms.html            # 利用規約（同上）
     ├── manifest.webmanifest  # PWAマニフェスト
     ├── sw.js                 # Service Worker
     └── icons/                # アプリアイコン

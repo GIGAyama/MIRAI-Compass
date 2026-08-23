@@ -22,6 +22,8 @@
     "htmlFiles": [
       "docs/index.html",
       "docs/offline.html",
+      "docs/privacy.html",
+      "docs/terms.html",
       "index.html",
       "css.html"
     ],
@@ -29,10 +31,11 @@
     "imageDirs": [
       "docs/icons"
     ],
-    "//allowedRemoteScripts": "本文の書体に Google Fonts をつかっている。読めなくても CSS の代替に落ちるだけで画面は出る。艦隊の先例（Reversi・Shiritori_fighter・KAKE_Master）と同じ扱い",
+    "//allowedRemoteScripts": "本文の書体に Google Fonts をつかっている。読めなくても CSS の代替に落ちるだけで画面は出る。艦隊の先例（Reversi・Shiritori_fighter・KAKE_Master）と同じ扱い。自分のドメインを足してあるのは、B_NO_CDN_CODE が <link> を rel で区別せず、法務ページ（docs/privacy.html・docs/terms.html）の rel=canonical まで「CDN から取る実行コード」と読むため。canonical は github.io と独自ドメインの二重配信をまとめるものなので相対にはできない",
     "allowedRemoteScripts": [
       "^https://fonts\\.googleapis\\.com(/|$)",
-      "^https://fonts\\.gstatic\\.com(/|$)"
+      "^https://fonts\\.gstatic\\.com(/|$)",
+      "^https://mirai-compass\\.giga-school\\.com(/|$)"
     ],
     "skips": [
       {
@@ -56,7 +59,9 @@
       "index.html",
       "code.gs",
       "docs/index.html",
-      "docs/offline.html"
+      "docs/offline.html",
+      "docs/privacy.html",
+      "docs/terms.html"
     ],
     "styleFiles": [
       "css.html",
@@ -75,7 +80,9 @@
       "docs/app.js",
       "docs/install-hook.js",
       "docs/sw.js",
-      "docs/offline.html"
+      "docs/offline.html",
+      "docs/privacy.html",
+      "docs/terms.html"
     ],
     "generatedFiles": [
       "vendor_css.html",

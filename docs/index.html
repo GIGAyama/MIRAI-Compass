@@ -193,6 +193,10 @@
       display: none;             /* 案内できるときだけ出す */
     }
     .setup-footer { margin-top: 16px; font-size: .78em; color: var(--muted); }
+    /* 法務ページ（docs/terms.html・docs/privacy.html）への入口。
+       ここ以外に画面の枠が無い（URL 設定後は iframe が全面になる）ので、
+       たどり着ける場所はこの1か所だけである。 */
+    .setup-footer a { color: var(--primary); text-decoration: underline; text-underline-offset: .18em; }
 
     .ios-hint {
       display: none;
@@ -306,7 +310,10 @@
         <button class="btn btn-secondary" id="btn-clear" type="button">設定をリセット</button>
       </div>
 
-      <div class="setup-footer">&copy; 2026 みらいコンパス Project</div>
+      <div class="setup-footer">
+        <a href="terms.html">利用規約</a>　/　<a href="privacy.html">プライバシーポリシー</a><br>
+        &copy; 2026 みらいコンパス Project
+      </div>
     </div>
   </div>
 
