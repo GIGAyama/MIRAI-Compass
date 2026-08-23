@@ -192,6 +192,16 @@ npm run ci      # 上の全部（CI と同じもの）
    * このリポジトリの Settings > Pages を開く
    * Source: 「Deploy from a branch」/ Branch: main / フォルダ: /docs を選択して Save
    * 数分後に `https://<ユーザー名>.github.io/MIRAI-Compass/` が公開されます
+
+   > **配信されるのは `docs/` の中だけです。** リポジトリ直下に置いたファイルは
+   > どのURLにも現れません（法務ページを直下に置いて 404 になった前例あり）。
+   > 独自ドメインの `CNAME` も配信元、つまり `docs/CNAME` に置きます。
+   >
+   > `docs/manifest.webmanifest` の `id` / `start_url` / `scope` が `"./"` なのも
+   > 同じ理由です。独自ドメイン（`https://mirai-compass.giga-school.com/`）でも
+   > github.io のサブディレクトリ（`https://<ユーザー名>.github.io/MIRAI-Compass/`）でも
+   > 正しく解決される唯一の書き方で、`"/"` に戻すと後者でインストールできなくなります。
+
 2. **初期設定**:
    * 公開されたURLをChromeで開き、GASのウェブアプリURL（`.../exec`）を入力して「アプリをはじめる」
 3. **インストール**:

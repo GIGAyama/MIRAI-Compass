@@ -5,9 +5,9 @@
   "lang": "ja",
   "dir": "ltr",
 
-  "id": "/",
-  "start_url": "/",
-  "scope": "/",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
 
   "display": "standalone",
   "display_override": ["standalone", "fullscreen", "minimal-ui"],
