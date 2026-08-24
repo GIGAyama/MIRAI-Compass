@@ -178,6 +178,280 @@ var MiraiAuth = (function () {
   };
 })();
 
+// === MIRAI DB — データベース（スプレッドシート）の入口と、作りの点検 ==========
+//
+// ■ いまの配り方（コンテナバインド）
+//   先生ごとに、このスクリプトが束ねられたスプレッドシートのコピーを配る。
+//   束ねられているそのファイルがデータベース本体なので、ID を持つ必要も、
+//   ドライブに新しく作る必要もない。先生は「どこにできたのか」を探さなくてよく、
+//   いま開いているそのファイルが中身である。
+//
+// ■ 前の配り方（独立スクリプト）で公開済みの学級
+//   script.new で作った独立スクリプトには束ねられたファイルが無く、
+//   getActiveSpreadsheet() は null を返す。その学級では、これまでどおり
+//   スクリプトプロパティの SS_ID を見る。
+//   ★ ここを消すと、すでに使っている学級の学習記録がまるごと見えなくなる。
+//
+// ■ 「直す」の範囲について
+//   自動で行うのは **足すことだけ**（シートを作る・見出し行を書く・
+//   足りない見出しを末尾に足す）。列の並びが入れちがっている場合に見出しだけを
+//   書き直すと、**まちがった列に正しいラベルが付いて事故が見えなくなる**。
+//   このアプリは Worksheets / Responses を列番号で読み書きしている（WS_COL_* /
+//   RS_COL_*）ので、1列ずれるだけで児童の答案と先生の赤ペンが入れかわる。
+//   並びのずれは inspect() が場所を名指しして報告し、直すのは人の手に残す。
+var MiraiDb = (function () {
+  var SS_ID_KEY = 'SS_ID';
+
+  /** 束ねられているスプレッドシート。独立スクリプトなら null。 */
+  function bound() {
+    try { return SpreadsheetApp.getActiveSpreadsheet() || null; }
+    catch (e) { return null; }   // 独立スクリプトでは例外になる版がある
+  }
+
+  /** コンテナバインドで動いているか。 */
+  function isBound() { return !!bound(); }
+
+  function specs() {
+    return Object.keys(DB_SCHEMA).map(function (k) { return DB_SCHEMA[k]; });
+  }
+
+  /** 見出し行を、シートの実際の幅ぶんだけ読む（無い列は ''）。 */
+  function headerRow(sheet, want) {
+    var maxCols = sheet.getMaxColumns();
+    var width = Math.min(Math.max(want, sheet.getLastColumn()), maxCols);
+    if (width < 1 || sheet.getLastRow() < 1) return [];
+    return sheet.getRange(1, 1, 1, width).getValues()[0].map(function (v) {
+      return (v === null || v === undefined) ? '' : String(v).trim();
+    });
+  }
+
+  /**
+   * 足りないものだけ足す。**既にある列には触れない。**
+   * 6時間キャッシュして、ほぼ全 API から呼ばれても1回で済むようにする。
+   */
+  function ensure(ss) {
+    var cache = CacheService.getScriptCache();
+    var cacheKey = 'schema_ok_' + ss.getId();
+    if (cache.get(cacheKey)) return ss;
+    applyAdditions(ss);
+    cache.put(cacheKey, '1', 21600); // 6時間
+    return ss;
+  }
+
+  /** ensure のキャッシュを捨てる（手当てのあと、次の1回で必ず見直させる）。 */
+  function forget(ss) {
+    try { CacheService.getScriptCache().remove('schema_ok_' + ss.getId()); } catch (ignore) {}
+  }
+
+  /**
+   * 安全な手当てだけを実行し、やったことを配列で返す。
+   *  ・シートが無い          → 作って見出しを書く
+   *  ・見出し行が空          → 見出しを書く
+   *  ・末尾の見出しが足りない → 足す（**前の並びが設計どおりのときだけ**）
+   *  ・見出しのセルが空      → ラベルを書き戻す（**ほかが全部一致しているときだけ**）
+   * 並びのずれ・別名の見出しには手を出さない。
+   */
+  function applyAdditions(ss) {
+    var done = [];
+    specs().forEach(function (def) {
+      var sheet = ss.getSheetByName(def.name);
+      if (!sheet) {
+        sheet = ss.insertSheet(def.name);
+        sheet.appendRow(def.headers);
+        sheet.setFrozenRows(1);
+        sheet.getRange(1, 1, 1, def.headers.length).setBackground('#f3f4f6').setFontWeight('bold');
+        done.push('「' + def.name + '」シートを作りました');
+        return;
+      }
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow(def.headers);
+        sheet.setFrozenRows(1);
+        sheet.getRange(1, 1, 1, def.headers.length).setBackground('#f3f4f6').setFontWeight('bold');
+        done.push('「' + def.name + '」の見出し行を書きました');
+        return;
+      }
+
+      var actual = headerRow(sheet, def.headers.length);
+
+      // 空の見出しセルだけを書き戻す。ほかの見出しが1つでもずれていたら何もしない
+      // （ずれているところに正しいラベルを置くと、事故が見えなくなるため）。
+      var blanks = [];
+      var mismatched = false;
+      for (var i = 0; i < def.headers.length; i++) {
+        var cell = actual[i] === undefined ? '' : actual[i];
+        if (cell === '') { if (i < actual.length) blanks.push(i); }
+        else if (cell !== def.headers[i]) { mismatched = true; }
+      }
+      if (!mismatched && blanks.length) {
+        blanks.forEach(function (i) { sheet.getRange(1, i + 1).setValue(def.headers[i]); });
+        done.push('「' + def.name + '」の空だった見出し ' + blanks.length + ' 個を書き戻しました');
+      }
+
+      // 末尾に足りない見出しを足す。手前の並びが設計どおりのときだけ。
+      if (actual.length < def.headers.length && !mismatched) {
+        var prefixOk = true;
+        for (var j = 0; j < actual.length; j++) {
+          if (actual[j] !== '' && actual[j] !== def.headers[j]) prefixOk = false;
+        }
+        if (prefixOk) {
+          var add = def.headers.slice(actual.length);
+          if (sheet.getMaxColumns() < def.headers.length) {
+            sheet.insertColumnsAfter(sheet.getMaxColumns(), def.headers.length - sheet.getMaxColumns());
+          }
+          sheet.getRange(1, actual.length + 1, 1, add.length).setValues([add]);
+          done.push('「' + def.name + '」に見出し「' + add.join('」「') + '」を足しました');
+        }
+      }
+    });
+    return done;
+  }
+
+  /**
+   * 作りが DB_SCHEMA のとおりかを点検する。**1文字も書き換えない。**
+   * @return {{sheet: string, kind: string, detail: string, fixable: boolean}[]}
+   */
+  function inspect(ss) {
+    var found = [];
+    specs().forEach(function (def) {
+      var sheet = ss.getSheetByName(def.name);
+      if (!sheet) {
+        found.push({ sheet: def.name, kind: 'シートが無い', detail: 'アプリが使うシートがありません', fixable: true });
+        return;
+      }
+      if (sheet.getLastRow() === 0) {
+        found.push({ sheet: def.name, kind: '見出しが無い', detail: '1行目が空です', fixable: true });
+        return;
+      }
+
+      var actual = headerRow(sheet, def.headers.length);
+      var at = function (i) { return actual[i] === undefined ? '' : actual[i]; };
+
+      var wrong = [];   // 位置は足りているが名前がちがう
+      var blank = [];   // 名前が消えている
+      for (var i = 0; i < def.headers.length; i++) {
+        if (i >= actual.length) continue;      // 足りないぶんは下でまとめて報告
+        if (at(i) === '') blank.push(i);
+        else if (at(i) !== def.headers[i]) wrong.push(i);
+      }
+
+      if (actual.length < def.headers.length) {
+        found.push({
+          sheet: def.name,
+          kind: '列が足りない',
+          detail: (actual.length + 1) + '列目から先の「' + def.headers.slice(actual.length).join('」「') + '」がありません',
+          fixable: wrong.length === 0,
+        });
+      }
+      if (blank.length) {
+        found.push({
+          sheet: def.name,
+          kind: '見出しが空',
+          detail: blank.map(function (i) { return (i + 1) + '列目（' + def.headers[i] + '）'; }).join('・'),
+          fixable: wrong.length === 0,
+        });
+      }
+      if (wrong.length) {
+        // 設計どおりの見出しが順番だけ入れかわっているのか、まったく別物なのかを分ける。
+        var present = def.headers.filter(function (h) { return actual.indexOf(h) !== -1; }).length;
+        var shuffled = present === def.headers.length;
+        var i0 = wrong[0];
+        found.push({
+          sheet: def.name,
+          kind: shuffled ? '列の並びがちがう' : '見出しがちがう',
+          detail: (i0 + 1) + '列目が「' + def.headers[i0] + '」のはずが「' + (at(i0) || '空') + '」になっています'
+            + (wrong.length > 1 ? '（ほか ' + (wrong.length - 1) + ' 列もずれています）' : '')
+            + (shuffled ? '。必要な見出しはそろっているので、列ごと動かして元の順にしてください' : ''),
+          fixable: false,   // 中身が付いてくるので、機械では直さない
+        });
+      }
+
+      var extra = [];
+      for (var j = def.headers.length; j < actual.length; j++) {
+        if (at(j) !== '') extra.push(at(j));
+      }
+      if (extra.length) {
+        found.push({
+          sheet: def.name,
+          kind: '列が多い',
+          detail: (def.headers.length + 1) + '列目から先に「' + extra.join('」「') + '」があります（アプリは読みません）',
+          fixable: false,
+        });
+      }
+    });
+    return found;
+  }
+
+  /**
+   * 安全な手当てだけを実行する。直せなかったものは残ったまま返る。
+   * @return {{done: string[], left: object[]}}
+   */
+  function repair(ss) {
+    var done = applyAdditions(ss);
+    forget(ss);
+    return { done: done, left: inspect(ss) };
+  }
+
+  /** データベース本体。無ければ例外。 */
+  function open() {
+    var here = bound();
+    if (here) return ensure(here);
+
+    var ssId = PropertiesService.getScriptProperties().getProperty(SS_ID_KEY);
+    if (!ssId) throw new Error('DB_NOT_READY: データベースがまだありません。先生のアカウントで初期設定を行ってください。');
+    return ensure(SpreadsheetApp.openById(ssId));
+  }
+
+  /** データベース本体。無ければ null（画面を止めずに「まだ空」を返す用）。 */
+  function tryOpen() {
+    try { return open(); } catch (e) { return null; }
+  }
+
+  /** データベースの ID。無ければ ''（キャッシュのキーに使う）。 */
+  function tryId() {
+    var here = bound();
+    if (here) return here.getId();
+    return PropertiesService.getScriptProperties().getProperty(SS_ID_KEY) || '';
+  }
+
+  /** すでに使える状態か（スプレッドシートがあるか）。 */
+  function isReady() { return !!tryId(); }
+
+  /**
+   * 「最初の先生」になってよい人かどうか。
+   *
+   * コンテナバインドでは、配ったコピーの所有者＝コピーを作った先生である。
+   * 児童は Drive の権限を持たないので、所有者／編集者かどうかで先生を見分けられる。
+   * 所有者を取れない環境（共有ドライブ・組織の制限）では判定できないので true を返し、
+   * これまでどおり先着を最初の先生にする（前の配り方と同じふるまい）。
+   */
+  function mayBecomeFirstTeacher(ss, email) {
+    var me = String(email || '').trim().toLowerCase();
+    if (!me) return true;          // メールが取れない環境では判定できない
+    var known = [];
+    try {
+      var owner = ss.getOwner();
+      if (owner) known.push(String(owner.getEmail() || '').toLowerCase());
+    } catch (e) { /* 共有ドライブでは取れない */ }
+    try {
+      ss.getEditors().forEach(function (u) { known.push(String(u.getEmail() || '').toLowerCase()); });
+    } catch (e) { /* 権限が無ければ取れない */ }
+    if (!known.length) return true;   // 判定できないので止めない
+    return known.indexOf(me) !== -1;
+  }
+
+  /** 先生が中身を見に行くための URL。無ければ null。 */
+  function url() {
+    var id = tryId();
+    return id ? 'https://docs.google.com/spreadsheets/d/' + id + '/edit' : null;
+  }
+
+  return {
+    isBound: isBound, isReady: isReady, open: open, tryOpen: tryOpen,
+    tryId: tryId, url: url, ensure: ensure, inspect: inspect, repair: repair,
+    mayBecomeFirstTeacher: mayBecomeFirstTeacher,
+  };
+})();
+
 // ==========================================
 //  1. 基本機能 & HTML配信 (Core Functions)
 // ==========================================
@@ -216,19 +490,119 @@ function include(filename) {
 }
 
 // ==========================================
+//  1-b. スプレッドシートのメニュー（コンテナバインドのときだけ）
+// ==========================================
+
+/**
+ * スプレッドシートを開いたときに出るメニュー。
+ * コンテナバインド（コピーで配った形）でのみ呼ばれる。独立スクリプトでは出ない。
+ */
+function onOpen(e) {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu('みらいコンパス')
+      .addItem('シートを点検する', 'showSheetCheck')
+      .addItem('足りないシート・見出しを直す', 'repairSheetsFromMenu')
+      .addToUi();
+  } catch (err) {
+    // ウェブアプリとして動いているときは画面が無い。何もしない。
+  }
+}
+
+/**
+ * メニュー「シートを点検する」。**1文字も書き換えない。**
+ *
+ * ⚠️ google.script.run は末尾 `_` の無い関数を誰でも呼べるので、この関数も
+ *    児童の画面から呼べてしまう。**先に getUi() を取る**のはそのため。
+ *    画面が無い文脈（ウェブアプリ）ではここで例外になり、シートを1枚も読まずに終わる。
+ *    返すのは見出しの並びだけで、児童の名前も学習記録も出さない。
+ */
+function showSheetCheck() {
+  var ui = SpreadsheetApp.getUi();          // 画面が無ければ、ここで止まる
+  var found = MiraiDb.inspect(MiraiDb.open());
+  ui.alert('シートの点検', describeFindings_(found), ui.ButtonSet.OK);
+}
+
+/**
+ * メニュー「足りないシート・見出しを直す」。
+ * 足すだけで、既にある列は動かさない（並びのずれは人が直す）。
+ */
+function repairSheetsFromMenu() {
+  var ui = SpreadsheetApp.getUi();          // 画面が無ければ、ここで止まる
+  var answer = ui.alert(
+    'シートを直す',
+    '足りないシートと見出しだけを足します。\n'
+      + '入っているデータは動かしません。列の並びが入れちがっている場合は、'
+      + '直さずに場所をお知らせします。\n\n実行しますか？',
+    ui.ButtonSet.OK_CANCEL);
+  if (answer !== ui.Button.OK) return;
+
+  var report = MiraiDb.repair(MiraiDb.open());
+  var text = (report.done.length ? '次のとおり直しました。\n\n・' + report.done.join('\n・') + '\n\n' : '足すものはありませんでした。\n\n')
+    + describeFindings_(report.left);
+  ui.alert('シートを直す', text, ui.ButtonSet.OK);
+}
+
+/** 点検結果を、先生に読める文章にする。 */
+function describeFindings_(found) {
+  if (!found || !found.length) return 'シートの作りは想定どおりです。';
+  return '次のところが、アプリの想定と違います。\n\n'
+    + found.map(function (f) { return '・「' + f.sheet + '」' + f.kind + '：' + f.detail; }).join('\n')
+    + '\n\n列の並びは変えないでください。ワークシートと答案は列の番号で読み書きしています。';
+}
+
+/**
+ * アプリの設定画面から呼ぶ点検。先生だけ。
+ * 返すのはシート名と見出しの並びだけで、児童のデータは含まない。
+ */
+function getDatabaseHealth() {
+  try {
+    MiraiAuth.requireTeacher();
+    var ss = MiraiDb.open();
+    return createSuccessResponse({
+      isBound: MiraiDb.isBound(),
+      ssUrl: MiraiDb.url(),
+      findings: MiraiDb.inspect(ss)
+    });
+  } catch (e) {
+    return createErrorResponse(e);
+  }
+}
+
+/**
+ * アプリの設定画面から呼ぶ手当て。先生だけ。
+ * 足りないシート・見出しを足すだけで、既にある列は動かさない。
+ */
+function repairDatabase() {
+  try {
+    MiraiAuth.requireTeacher();
+    var report = MiraiDb.repair(MiraiDb.open());
+    return createSuccessResponse({ done: report.done, findings: report.left });
+  } catch (e) {
+    return createErrorResponse(e);
+  }
+}
+
+// ==========================================
 //  2. システム初期化・設定 (System Init)
 // ==========================================
 
 /**
  * アプリ起動時の初期データ取得
- * スプレッドシートIDがあるかなどを確認します
+ * データベースが使える状態かを確認します。
+ * コンテナバインド（スプレッドシートのコピーで配った形）では、束ねられている
+ * そのファイルが本体なので、ここは必ず「使える」になります。
  */
 function getAppInitialData() {
   try {
-    const ssId = PROPERTIES.getProperty('SS_ID');
     return createSuccessResponse({
-      isInitialized: !!ssId,
-      ssUrl: ssId ? `https://docs.google.com/spreadsheets/d/${ssId}/edit` : null
+      isInitialized: MiraiDb.isReady(),
+      isBound: MiraiDb.isBound(),
+      // 先生が1人も登録されていないうちは、配り方によらず初期設定画面を出す。
+      // コンテナバインドではデータベースが最初から在るため、これが無いと
+      // 「最初の先生を決める」画面にたどり着けない。
+      needsFirstTeacher: MiraiAuth.teacherEmails().length === 0,
+      ssUrl: MiraiDb.url()
     });
   } catch (e) {
     return createErrorResponse(e);
@@ -241,33 +615,45 @@ function getAppInitialData() {
  */
 function initSystem() {
   try {
-    // 既にシステムが存在する場合の再初期化は、先生として登録されていないと拒否する。
-    // 未セットアップ（初回）は誰でも通し、その本人を最初の先生にブートストラップする。
-    var existing = PROPERTIES.getProperty('SS_ID');
-    if (existing && !MiraiAuth.isTeacher()) {
+    // ★ 「やり直し」を止める条件は、スプレッドシートの有無ではなく **先生が登録済みか**。
+    //   コンテナバインドではデータベースが最初から在るので、SS_ID の有無で見ていると
+    //   配ったコピーを最初に開いた先生自身が締め出される。
+    var registered = MiraiAuth.teacherEmails().length > 0;
+    if (registered && !MiraiAuth.isTeacher()) {
       throw new Error('AUTH_REQUIRED: 先生として登録されたGoogleアカウントでログインしてください。');
     }
 
-    let ssId = PROPERTIES.getProperty('SS_ID');
-    let ss;
-    if (ssId) {
-      ss = SpreadsheetApp.openById(ssId);
-    } else {
+    let ss = MiraiDb.isReady() ? MiraiDb.open() : null;
+    if (!ss) {
+      // 前の配り方（独立スクリプト）で、まだデータベースが無いとき。
+      // コンテナバインドではここへ来ない（束ねられたファイルがそのまま本体）。
       ss = SpreadsheetApp.create('みらいコンパス_データベース');
-      ssId = ss.getId();
-      PROPERTIES.setProperty('SS_ID', ssId);
+      PROPERTIES.setProperty('SS_ID', ss.getId());
     }
 
-    // 全シートの存在確認と作成
-    checkAndFixSheets(ss);
+    // ★ 最初の1人を決めるときだけ、そのファイルを編集できる人かを確かめる。
+    //   コンテナバインドでは、児童に URL を配ったあと・先生が開く前に児童が開くと、
+    //   その児童が「最初の先生」になってしまう。スプレッドシートの所有者／編集者は
+    //   コピーを作った先生だけなので、ここで先生本人かどうかを見分けられる。
+    //   （所有者を取れない環境では、これまでどおり先着を最初の先生にする）
+    if (!registered && !MiraiDb.mayBecomeFirstTeacher(ss, MiraiAuth.currentEmail())) {
+      throw new Error('AUTH_REQUIRED: このデータベースを持っている先生のGoogleアカウントで開いてください。');
+    }
 
-    // デフォルトの「シート1」があれば削除
-    const defaultSheet = ss.getSheetByName('シート1');
-    if (defaultSheet) ss.deleteSheet(defaultSheet);
+    // シートと見出しをそろえる（足りないものを足すだけ。並びのずれには触れない）
+    const report = MiraiDb.repair(ss);
+
+    // 新しく作ったファイルに残る「シート1」があれば削除
+    const defaultSheet = ss.getSheetByName('シート1') || ss.getSheetByName('Sheet1');
+    if (defaultSheet && ss.getSheets().length > 1) ss.deleteSheet(defaultSheet);
 
     // 初期化を実行した本人を最初の先生にする（一覧が空のときのみ）。
     MiraiAuth.bootstrapFirstTeacher();
-    return createSuccessResponse({ message: 'システムを初期化しました。' });
+    return createSuccessResponse({
+      message: 'システムを初期化しました。',
+      done: report.done,
+      left: report.left
+    });
   } catch (e) {
     return createErrorResponse(e);
   }
@@ -301,11 +687,8 @@ function removeTeacherEmail(email) {
  */
 function getData() {
   try {
-    const ssId = PROPERTIES.getProperty('SS_ID');
-    if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
-    
-    const ss = SpreadsheetApp.openById(ssId);
-    checkAndFixSheets(ss); // 念のためシート構造チェック
+    const ss = MiraiDb.tryOpen();   // シートと見出しの点検・手当てもここで済む
+    if (!ss) return createSuccessResponse({ json: JSON.stringify({}) });
 
     // 各シートからデータを取得して整形
     const unitData = fetchSheetData(ss, DB_SCHEMA.UnitMaster.name).map(r => ({
@@ -426,7 +809,7 @@ function getData() {
  */
 function getLiveStatusSnapshot() {
   try {
-    const ssId = PROPERTIES.getProperty('SS_ID');
+    const ssId = MiraiDb.tryId();
     if (!ssId) return createSuccessResponse({ live: [] });
 
     // 40台が10秒間隔で同時にポーリングすると、同じシートの全読みが毎秒4回走る。
@@ -438,7 +821,7 @@ function getLiveStatusSnapshot() {
     const cached = cache.get(cacheKey);
     if (cached) return createSuccessResponse({ live: JSON.parse(cached) });
 
-    const ss = SpreadsheetApp.openById(ssId);
+    const ss = MiraiDb.open();
     const liveData = fetchSheetData(ss, DB_SCHEMA.LiveStatus.name).map(r => ({
       id: String(r[0]), name: String(r[1]), task: String(r[2]), mode: String(r[3]),
       time: r[4] ? formatDate(r[4]) : '', currentUnitId: String(r[5] || ''),
@@ -458,7 +841,7 @@ function getLiveStatusSnapshot() {
  * これにより児童のSOS・状態変化が次のポーリングで確実に反映される。
  */
 function invalidateLiveSnapshotCache() {
-  const ssId = PROPERTIES.getProperty('SS_ID');
+  const ssId = MiraiDb.tryId();
   if (!ssId) return;
   try { CacheService.getScriptCache().remove('live_snapshot_' + ssId); } catch (ignore) { /* キャッシュ不調でも本処理は続行 */ }
 }
@@ -473,7 +856,7 @@ function invalidateLiveSnapshotCache() {
 function getGalleryData() {
   try {
     MiraiAuth.requireUser();
-    const ssId = PROPERTIES.getProperty('SS_ID');
+    const ssId = MiraiDb.tryId();
     if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
 
     const cache = CacheService.getScriptCache();
@@ -481,7 +864,7 @@ function getGalleryData() {
     const cached = cache.get(cacheKey);
     if (cached) return createSuccessResponse({ json: cached });
 
-    const ss = SpreadsheetApp.openById(ssId);
+    const ss = MiraiDb.open();
     // getData と同じ studentKey 規則でまとめる
     const clsPlans = {};
     fetchSheetData(ss, DB_SCHEMA.StudentPlans.name).forEach(r => {
@@ -516,7 +899,7 @@ function getGalleryData() {
 function getProgressSnapshot() {
   try {
     MiraiAuth.requireTeacher(); // クラス全員分のデータを返すため教員限定
-    const ssId = PROPERTIES.getProperty('SS_ID');
+    const ssId = MiraiDb.tryId();
     if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
 
     const cache = CacheService.getScriptCache();
@@ -524,7 +907,7 @@ function getProgressSnapshot() {
     const cached = cache.get(cacheKey);
     if (cached) return createSuccessResponse({ json: cached });
 
-    const ss = SpreadsheetApp.openById(ssId);
+    const ss = MiraiDb.open();
     // getData と同じ studentKey 規則でまとめる
     const clsProgress = {};
     fetchSheetData(ss, DB_SCHEMA.LearningLogs.name).forEach(r => {
@@ -557,9 +940,8 @@ function getProgressSnapshot() {
 function getStudentPulse(studentName) {
   try {
     const sid = MiraiAuth.requireUser();
-    const ssId = PROPERTIES.getProperty('SS_ID');
-    if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
-    const ss = SpreadsheetApp.openById(ssId);
+    const ss = MiraiDb.tryOpen();
+    if (!ss) return createSuccessResponse({ json: JSON.stringify({}) });
 
     // スタンプの照合ルールは getStudentProgress と同一
     // （studentId がある行は本人メールでだけ照合、無い行は表示名でフォールバック）
@@ -590,9 +972,8 @@ function getStudentProgress(studentName, classId, currentUnitId) {
     // 本人＝Googleメール（サーバー由来）。これ自身の読み取りなので、身元は必ずサーバーで確定する。
     // クライアント申告の studentName は表示名としてのみ使い、アクセス範囲の判定には使わない。
     const sid = MiraiAuth.requireUser();
-    const ssId = PROPERTIES.getProperty('SS_ID');
-    if (!ssId) return createSuccessResponse({ json: JSON.stringify({}) });
-    const ss = SpreadsheetApp.openById(ssId);
+    const ss = MiraiDb.tryOpen();
+    if (!ss) return createSuccessResponse({ json: JSON.stringify({}) });
 
     // ログイン時に現在の単元・クラス情報をLiveStatusに書き込む（本人行を studentId で特定）
     if (classId || currentUnitId) {
@@ -1289,10 +1670,7 @@ function importUnitJson(jsonStr) {
   if (lock.tryLock(10000)) {
     try {
       MiraiAuth.requireTeacher();
-      const ssId = PROPERTIES.getProperty('SS_ID');
-      if (!ssId) throw new Error('初期設定未完了');
-      const ss = SpreadsheetApp.openById(ssId);
-      checkAndFixSheets(ss);
+      const ss = MiraiDb.open();
 
       const data = JSON.parse(jsonStr);
       if (!data.unitInfo) data.unitInfo = {};
@@ -2366,12 +2744,13 @@ function uploadImageToDrive(base64Data) {
 //  6. ヘルパー関数 (Helper Functions)
 // ==========================================
 
+/**
+ * データベース本体を返す（シートと見出しの手当て込み）。
+ * 実体は MiraiDb.open()。コンテナバインドなら束ねられたファイル、
+ * 前の配り方（独立スクリプト）なら SS_ID のファイルを開く。
+ */
 function getSpreadsheet() {
-  const ssId = PROPERTIES.getProperty('SS_ID');
-  if (!ssId) throw new Error('Database not initialized.');
-  const ss = SpreadsheetApp.openById(ssId);
-  checkAndFixSheets(ss);
-  return ss;
+  return MiraiDb.open();
 }
 
 function fetchSheetData(ss, sheetName) {
@@ -2383,29 +2762,17 @@ function fetchSheetData(ss, sheetName) {
   return sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
 }
 
+/**
+ * シートと見出しの手当て。中身は MiraiDb.ensure()（6時間キャッシュ付き）。
+ *
+ * ★ 以前ここにあった手当ては、見出しの中身を見ずに getLastColumn() だけで
+ *   「足りないぶんを末尾に足す」ものだった。列を1つ消したシートでは、
+ *   **残っている列のうしろに別の見出しが足され、以後ずっと1列ずれたまま**
+ *   読み書きされる。MiraiDb.ensure() は見出しの中身を確かめてから足し、
+ *   並びがずれているときは何もせずに inspect() の報告へ回す。
+ */
 function checkAndFixSheets(ss) {
-  // ほぼ全APIから呼ばれる高コスト処理のため、チェック結果を6時間キャッシュして高速化する
-  // （スキーマ変更時はキャッシュ期限切れ後に自動で再チェックされる）
-  const cache = CacheService.getScriptCache();
-  const cacheKey = 'schema_ok_' + ss.getId();
-  if (cache.get(cacheKey)) return;
-
-  Object.keys(DB_SCHEMA).forEach(key => {
-    const def = DB_SCHEMA[key];
-    let sheet = ss.getSheetByName(def.name);
-    if (!sheet) {
-      sheet = ss.insertSheet(def.name);
-      sheet.appendRow(def.headers);
-    } else {
-      const currentCols = sheet.getLastColumn();
-      if (currentCols < def.headers.length) {
-        const missingHeaders = def.headers.slice(currentCols);
-        sheet.getRange(1, currentCols + 1, 1, missingHeaders.length).setValues([missingHeaders]);
-      }
-    }
-  });
-
-  cache.put(cacheKey, '1', 21600); // 6時間
+  MiraiDb.ensure(ss);
 }
 
 function createSuccessResponse(data = {}) { return { success: true, ...data }; }

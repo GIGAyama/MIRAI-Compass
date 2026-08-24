@@ -211,9 +211,13 @@ function handleInitialResponse(res) {
   const btnSs = document.getElementById('btn-view-ss');
   if (btnSs && ssUrl) btnSs.onclick = () => window.open(ssUrl, '_blank');
 
-  // システム未初期化（スプレッドシートがない）の場合
-  if (!res.isInitialized) {
-    renderSetupOverlay(); // 初期設定画面を表示
+  // システム未初期化の場合。
+  // コンテナバインド（スプレッドシートのコピーで配った形）では、束ねられている
+  // そのファイルがデータベースなので isInitialized は常に true になる。
+  // それでも最初の1回は「最初の先生」を決める必要があるので、
+  // サーバーが先生を1人も知らないうちは初期設定画面を出す。
+  if (!res.isInitialized || res.needsFirstTeacher) {
+    renderSetupOverlay(!!res.isBound); // 初期設定画面を表示
   } else {
     loadMainData();       // メインデータを読み込み開始
   }
@@ -264,21 +268,29 @@ function loadMainData() {
  * [機能] 初期セットアップ画面の表示
  * 初めて使う時に表示される「初期設定を開始する」画面です。
  */
-function renderSetupOverlay() {
+function renderSetupOverlay(isBound) {
   const container = document.getElementById('app-container');
+  // 配り方によって、ここで起きることが違う。
+  //  ・コンテナバインド（コピーで配った形）＝ データベースはもう手元にある。
+  //    このボタンでやるのは「シートの用意」と「最初の先生を決める」ことだけ。
+  //  ・独立スクリプト（前の配り方）＝ ここで初めてスプレッドシートが作られる。
+  const where = isBound
+    ? 'このスクリプトが束ねられているスプレッドシート（いま開いているファイル）が、そのままデータベースです。ボタンを押すと、必要なシートと見出しがそろえられます。'
+    : '初期設定ボタンを押すと、Googleドライブにデータベース（スプレッドシート）が自動作成されます。';
   container.innerHTML = `
     <div class="d-flex flex-column justify-content-center align-items-center vh-100 text-center">
       <div class="card p-5 shadow-lg border-0 rounded-4" style="max-width: 600px;">
         <h1 class="text-primary mb-4 fw-bold"><i class="bi bi-compass me-2"></i>ようこそ</h1>
         <div class="text-start bg-light p-4 rounded-3 mb-4">
           <p class="mb-3">「みらいコンパス」は、子どもたちが主体的に学ぶ「自由進度学習」をサポートするWebアプリケーションです。</p>
-          <p class="mb-0">初期設定ボタンを押すと、Googleドライブにデータベース（スプレッドシート）が自動作成されます。</p>
+          <p class="mb-0">${where}</p>
         </div>
         <div class="alert alert-info mb-4" role="alert">
           <div class="fw-bold mb-1">このボタンを押したあなたが「最初の先生」になります</div>
           <div class="small">パスワードはありません。ログイン中の Google アカウントのメールアドレスで
           先生かどうかを見分けます。ほかの先生は、あとから設定（⚙）→「先生の管理（メールアドレス）」で
-          追加できます。</div>
+          追加できます。<br>
+          <strong>児童にURLを配る前に、先生が先に開いてこのボタンを押してください。</strong></div>
         </div>
         <button class="btn btn-primary btn-lg rounded-pill px-5 shadow-sm" onclick="startInitialization()">初期設定を開始する</button>
       </div>
@@ -985,6 +997,7 @@ function toggleSettings() {
           <button class="btn btn-outline-secondary btn-sm" onclick="openTeacherManager()">先生の管理（メールアドレス）</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="openAiSettings()">AI設定（Geminiキー・モデル）</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="openRosterManagerModal()">名簿管理</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="openDatabaseHealth()">データベースの点検</button>
         </div>
       </div>
     `,
