@@ -3,10 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="description" content="自由進度学習支援アプリケーション「みらいコンパス」">
+  <meta name="description" content="自由進度学習支援アプリケーション「みらいコンパス」。スプレッドシートをコピーして、先生ごとにご自分の Google アカウントで公開して使います。">
   <meta name="theme-color" content="#1a73e8">
   <meta name="color-scheme" content="light">
-  <title>みらいコンパス</title>
+  <title>みらいコンパス｜子どもが自分で計画を立てる自由進度学習アプリ</title>
+  <link rel="canonical" href="https://mirai-compass.giga-school.com/">
 
   <!--
     === Content Security Policy ===
@@ -64,6 +65,11 @@
       --primary-bg: #1a73e8;/* 面用 */
       --muted: #5c636a;     /* 白地で 5.99。以前の #6c757d は 4.68、#adb5bd は 2.03 だった */
       --text: #3c4043;
+      --border: #ccd2d9;
+      --surface: #f4f7fb;
+      --surface-strong: #e8eefa;
+      --warn-bg: #fdf3e7;
+      --warn-border: #a1560a;
       --safe-t: env(safe-area-inset-top, 0px);
       --safe-b: env(safe-area-inset-bottom, 0px);
       --safe-l: env(safe-area-inset-left, 0px);
@@ -71,17 +77,19 @@
     }
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-    /* 100vh はモバイルのアドレスバー分だけはみ出すので dvh を使う */
-    html, body { height: 100dvh; overflow: hidden; }
-    @supports not (height: 100dvh) { html, body { height: 100vh; } }
     body {
       font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
-      background: #f0f2f5;
+      background: #fff;
       color: var(--text);
-      line-height: 1.8;
+      line-height: 1.9;
       font-size: clamp(15px, 1.6vw + 10px, 18px);
       touch-action: manipulation;
     }
+    /* アプリ本体（iframe）を出しているあいだだけ、ページを固定して全画面にする。
+       案内のページは、ふつうにスクロールできないと読めない。
+       100dvh はモバイルのアドレスバー分だけ 100vh がはみ出すため。 */
+    body.app-mode { height: 100dvh; overflow: hidden; }
+    @supports not (height: 100dvh) { body.app-mode { height: 100vh; } }
 
     /* ===== アプリ表示（全画面iframe） ===== */
     #app-frame {
@@ -92,121 +100,131 @@
       border: none;
       display: none;
       background: #fff;
+      z-index: 10;
     }
+    body.app-mode #app-frame { display: block; }
 
-    /* 設定を開くための隠しホットスポット（左上すみを5回タップ） */
+    /* 設定を開くための隠しホットスポット（左上すみを5回タップ）。
+       アプリを出しているあいだだけ置く（案内のページでは邪魔になる）。 */
     #settings-hotspot {
       position: fixed;
       top: var(--safe-t); left: var(--safe-l);
       width: 48px; height: 48px;
       z-index: 50;
       background: transparent;
+      display: none;
     }
+    body.app-mode #settings-hotspot { display: block; }
 
-    /* ===== 初期設定 / 設定画面 ===== */
+    /* ===== 案内のページ ===== */
     #setup-screen {
-      position: fixed;
-      inset: 0;
       display: flex;
       flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      padding: calc(24px + var(--safe-t)) calc(24px + var(--safe-r))
-               calc(24px + var(--safe-b)) calc(24px + var(--safe-l));
-      background: #f0f2f5;
-      z-index: 100;
-      overflow-y: auto;
-      overscroll-behavior: contain;
+      max-width: 860px;
+      margin: 0 auto;
+      padding: calc(24px + var(--safe-t)) calc(20px + var(--safe-r))
+               calc(40px + var(--safe-b)) calc(20px + var(--safe-l));
     }
-    .setup-card {
-      background: #fff;
-      border-radius: 20px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-      padding: 32px 28px;
-      max-width: 520px;
-      width: 100%;
-      text-align: center;
-    }
-    .setup-card img { width: 84px; height: 84px; margin-bottom: 12px; }
-    .setup-card h1 { font-size: clamp(20px, 2.6vw + 12px, 26px); color: var(--primary); margin-bottom: 8px; }
-    .setup-card p.lead { font-size: .9em; color: var(--muted); margin-bottom: 20px; }
-    .setup-card label {
-      display: block;
-      text-align: left;
-      font-size: .8em;
-      font-weight: bold;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-    .setup-card input[type="url"] {
-      width: 100%;
-      min-height: 44px;          /* 指で押せる高さ */
-      padding: 12px 14px;
-      font-size: .9em;
-      border: 2px solid #dee2e6;
-      border-radius: 12px;
-      outline: none;
-      margin-bottom: 6px;
-    }
-    .setup-card input[type="url"]:focus { border-color: var(--primary); }
-    .setup-hint { font-size: .78em; color: var(--muted); text-align: left; margin-bottom: 18px; }
-    .setup-error {
-      display: none;
-      font-size: .85em;
-      color: #b02a37;            /* 白地で 5.09。以前の #ea4335 は 3.68 で基準未満だった */
-      background: rgba(176, 42, 55, 0.08);
-      border-radius: 8px;
-      padding: 8px 12px;
-      margin-bottom: 14px;
-      text-align: left;
-    }
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: none;
-      border-radius: 999px;
-      min-height: 44px;          /* タップ領域 */
-      padding: 12px 32px;
-      font-size: 1em;
-      font-weight: bold;
-      font-family: inherit;
-      cursor: pointer;
-      transition: opacity .15s;
-      text-decoration: none;
-    }
-    .btn:hover { opacity: .85; }
-    .btn:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
-    .btn-primary { background: var(--primary); color: #fff; width: 100%; }
-    .btn-secondary {
-      background: transparent;
-      color: var(--muted);
-      font-size: .9em;
-      padding: 10px 20px;
-    }
-    .btn-install {
-      background: #fff;
-      color: var(--primary);
-      border: 2px solid var(--primary);
-      width: 100%;
-      margin-top: 12px;
-      display: none;             /* 案内できるときだけ出す */
-    }
-    .setup-footer { margin-top: 16px; font-size: .78em; color: var(--muted); }
-    /* 法務ページ（docs/terms.html・docs/privacy.html）への入口。
-       ここ以外に画面の枠が無い（URL 設定後は iframe が全面になる）ので、
-       たどり着ける場所はこの1か所だけである。 */
-    .setup-footer a { color: var(--primary); text-decoration: underline; text-underline-offset: .18em; }
+    body.app-mode #setup-screen { display: none; }
 
+    .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+    .brand img { flex: none; }
+    h1 { font-size: clamp(1.45rem, 3.4vw + .6rem, 1.95rem); line-height: 1.45; }
+    h2 {
+      font-size: 1.22rem; line-height: 1.6; color: var(--primary);
+      margin: 2.2em 0 .6em; padding-bottom: 6px; border-bottom: 2px solid var(--border);
+    }
+    h3 { font-size: 1.03rem; margin: 1.7em 0 .4em; }
+    p { margin-bottom: .9em; }
+    ul, ol { padding-left: 1.5em; margin-bottom: .9em; }
+    li { margin-bottom: .35em; }
+    a { color: var(--primary); text-decoration: underline; text-underline-offset: .18em; }
+    :focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: var(--surface); padding: 2px 6px; border-radius: 4px;
+      font-size: .92em; overflow-wrap: anywhere;
+    }
+    .lead { font-size: 1.08em; color: var(--text); margin-bottom: .7em; }
+    .meta { font-size: .95em; color: var(--muted); margin-bottom: 1.4em; }
+
+    .callout {
+      background: #eef4fd; border: 1px solid var(--border);
+      border-left: 5px solid var(--primary); border-radius: 10px;
+      padding: 16px 20px; margin: 20px 0;
+    }
+    .callout--warn { background: var(--warn-bg); border-left-color: var(--warn-border); }
+    .callout > :last-child { margin-bottom: 0; }
+    .callout h2 { margin: 0 0 .5em; border: 0; padding: 0; font-size: 1.12rem; }
+
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0 8px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 48px; padding: 11px 22px; border-radius: 10px;
+      border: 1px solid var(--primary); background: transparent; color: var(--primary);
+      font: inherit; font-weight: 700; line-height: 1.5;
+      text-decoration: none; cursor: pointer;
+    }
+    .btn--primary { background: var(--primary-bg); border-color: var(--primary-bg); color: #fff; }
+    .btn--block { width: 100%; }
+
+    .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+    figure { margin: 0; }
+    figure img {
+      width: 100%; height: auto; display: block;
+      border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+    }
+    figcaption { font-size: .9em; color: var(--muted); margin-top: 6px; line-height: 1.7; }
+    .shot--wide { margin: 20px 0; }
+    @media (max-width: 560px) { .shots { grid-template-columns: 1fr; } }
+
+    .steps { counter-reset: step; list-style: none; padding-left: 0; }
+    .steps li { position: relative; padding-left: 2.4em; margin-bottom: .8em; }
+    .steps li::before {
+      counter-increment: step; content: counter(step);
+      position: absolute; left: 0; top: .35em;
+      width: 1.7em; height: 1.7em; border-radius: 50%;
+      background: var(--surface-strong); color: var(--primary);
+      font-size: .85em; font-weight: 700; line-height: 1.7em; text-align: center;
+    }
+
+    .table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--border); border-radius: 10px; }
+    table { border-collapse: collapse; width: 100%; font-size: .97em; }
+    th, td { border-bottom: 1px solid var(--border); padding: 10px 14px; text-align: left; vertical-align: top; }
+    tbody th { background: var(--surface-strong); white-space: nowrap; }
+    tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
+    @media screen and (max-width: 600px) {
+      .table-wrap { border: 0; border-radius: 0; overflow-x: visible; }
+      table, tbody, tbody tr, tbody th, tbody td { display: block; width: 100%; }
+      tbody tr { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+      tbody th, tbody td { border-bottom: 0; padding: 0; background: transparent; }
+      tbody th { margin-bottom: 6px; font-weight: 700; }
+    }
+
+    /* ===== 児童の端末に入れるところ（URL 入力） ===== */
+    .start-card {
+      border: 1px solid var(--border); border-radius: 14px;
+      background: var(--surface); padding: 20px; margin: 18px 0;
+    }
+    .start-card label { display: block; font-weight: 700; margin-bottom: 6px; }
+    input[type="url"] {
+      width: 100%; padding: 13px 14px; font: inherit;
+      border: 2px solid var(--border); border-radius: 10px; background: #fff; color: var(--text);
+    }
+    input[type="url"]:focus { border-color: var(--primary); outline: none; }
+    .setup-hint { font-size: .85em; color: var(--muted); margin: 6px 0 12px; }
+    .setup-error { color: #b02a37; font-size: .9em; margin-bottom: 10px; display: none; }
+    .btn-install { display: none; margin-top: 10px; }  /* 案内できるときだけ出す */
     .ios-hint {
-      display: none;
-      margin-top: 14px;
-      font-size: .82em;
-      color: var(--muted);
-      background: #f8f9fa;
-      border-radius: 12px;
-      padding: 12px 14px;
-      text-align: left;
+      display: none; margin-top: 14px; font-size: .86em; color: var(--muted);
+      background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+    }
+    #extra-actions { display: none; margin-top: 12px; }
+    #extra-actions .btn { font-size: .9em; min-height: 44px; padding: 8px 16px; }
+
+    footer {
+      margin-top: 3em; padding-top: 16px; border-top: 1px solid var(--border);
+      font-size: .93em; color: var(--muted);
     }
 
     /* オフライン通知バー */
@@ -245,6 +263,7 @@
     #btn-update {
       background: #fff;
       color: #0a58ca;
+      border-color: #fff;
       padding: 8px 20px;
       min-height: 44px;
     }
@@ -258,7 +277,11 @@
       }
     }
     @media (forced-colors: active) {
-      .btn, .setup-card, input[type="url"] { border: 2px solid ButtonText; }
+      .btn, .start-card, .callout, input[type="url"], figure img { border: 2px solid ButtonText; }
+    }
+    @media print {
+      .actions, .shots, .shot--wide, .start-card, #offline-bar, #update-bar { display: none; }
+      body { color: #000; }
     }
   </style>
 </head>
@@ -274,47 +297,211 @@
   <!-- 設定を開く隠しホットスポット（左上すみを素早く5回タップ） -->
   <div id="settings-hotspot"></div>
 
-  <!-- 初期設定 / 設定画面 -->
+  <!-- 導入案内 兼 初期設定。URL を覚えている端末では、代わりにアプリが出る。 -->
   <div id="setup-screen">
-    <div class="setup-card">
-      <img src="icons/icon-192.png" width="84" height="84" alt="">
-      <h1>&#129517; みらいコンパス</h1>
-      <p class="lead">
-        はじめに、先生から伝えられた<br>
-        <strong>みらいコンパスのURL（Google Apps ScriptのウェブアプリURL）</strong><br>
-        を入力してください。この設定は一度だけです。
+    <main>
+      <div class="brand">
+        <img src="icons/icon-192.png" width="72" height="72" alt="" decoding="async">
+        <h1>みらいコンパス</h1>
+      </div>
+      <p class="lead">子どもが自分で学習の計画を立て、今日の一歩を選び、ふりかえりまで残せる、
+        自由進度学習のためのアプリです。小学校の教員が作りました。</p>
+      <p class="meta">Google アカウントが1つあれば動きます。サーバーの費用も、外部サービスの契約もありません。</p>
+
+      <div class="callout callout--warn">
+        <h2>このページからは、授業を始められません</h2>
+        <p>このアプリは、<strong>先生おひとりずつが、ご自分の Google アカウントで公開して使う</strong>形です。
+          学校をまたぐ共通の入口はありません。</p>
+        <ul>
+          <li><strong>児童のみなさん</strong>は、先生から配られた URL を開いてください。
+            この端末をアプリにしたいときは、下の「児童の端末に入れる」で先生から聞いた URL を入れます。</li>
+          <li><strong>先生方</strong>は、下の「入れかた」の手順で、ご自分のクラスの URL を作ってください。</li>
+        </ul>
+        <p>学習の記録は、公開した先生ご自身の Google ドライブにあるスプレッドシート1つに入ります。
+          制作者を含め、ほかの誰のところにもデータは行きません。</p>
+      </div>
+
+      <div class="actions">
+        <a class="btn btn--primary" href="https://giga-school.com/apps/mirai-compass/">くわしい紹介を読む</a>
+        <a class="btn" href="https://github.com/GIGAyama/MIRAI-Compass" rel="noopener">コードを見る（GitHub）</a>
+      </div>
+
+      <h2>どんなアプリか</h2>
+      <p>自由進度学習でいちばん重くなるのは、計画表を配って集めて確かめる時間と、
+        いま誰が止まっているのかを確かめるために教室を歩き回る時間です。
+        そこを画面に任せると、その時間を「止まっている子の横に座る」ほうへ回せます。</p>
+
+      <div class="shots">
+        <figure>
+          <img src="note/images/10-plan.png" width="2560" height="1720"
+               alt="計画の画面。左に課題の一覧があり、右の時間割の枠へ指で運んで並べられる" decoding="async">
+          <figcaption>左の課題を、右の時間割へ指で運びます。単元のはじめに、自分で順番を決めます。</figcaption>
+        </figure>
+        <figure>
+          <img src="note/images/17-ws-student-open.png" width="2560" height="1720"
+               alt="児童がワークシートを開いた画面。手書きで書き込める枠が並んでいる" loading="lazy" decoding="async">
+          <figcaption>ワークシートはアプリの中で配れます。手書きでも入力でも書けて、そのまま提出できます。</figcaption>
+        </figure>
+      </div>
+
+      <figure class="shot--wide">
+        <img src="note/images/27-live.png" width="2560" height="1720"
+             alt="先生の画面。児童のカードが席の配置で並び、いま取り組んでいる課題が見える" loading="lazy" decoding="async">
+        <figcaption>先生の画面。誰が何をしているかが席の配置のまま見えます。
+          「SOS」を押した子のカードは赤くなるので、こちらから行けます。</figcaption>
+      </figure>
+
+      <h3>使うときの流れ</h3>
+      <ol class="steps">
+        <li>先生が単元をつくり、名簿を登録し、その日の時数を配信します。</li>
+        <li>子どもが「けいかく」で課題を時間割へ並べます。</li>
+        <li>「きょう」から課題を開いて取り組み、終わったら「できた！」を押します。</li>
+        <li>困ったら「SOS」。先生の画面が赤くなります。</li>
+        <li>授業の終わりに「ふりかえり」を書きます。記録はそのまま一年ぶんたまります。</li>
+      </ol>
+
+      <h2>入れかた</h2>
+      <p>スプレッドシートをコピーして、公開の設定をするだけです。
+        準備するものは Google アカウント1つ。ふだんお使いの学校のアカウントで構いません。</p>
+
+      <div class="callout">
+        <p><strong>コピーの配布リンクは、まだ用意できていません。</strong>
+          用意でき次第、ここにボタンを置きます。それまでは
+          <a href="https://github.com/GIGAyama/MIRAI-Compass#readme" rel="noopener">README の「B. ファイルを貼り付ける」</a>
+          の手順（Apps Script に 11 個のファイルを貼る形）で入れられます。入るものは同じです。</p>
+      </div>
+
+      <ol class="steps">
+        <li>配布リンクを開き、「コピーを作成」を選びます。ご自分のドライブにファイルができます。</li>
+        <li>できたファイルを開き、上の「拡張機能」＞「Apps Script」を開きます。</li>
+        <li>右上の「デプロイ」＞「新しいデプロイ」＞種類は「ウェブアプリ」。
+          <strong>実行するユーザーは「自分」、アクセスできるユーザーは「同一 Workspace（Google アカウントを持つ全員）」</strong>にします。</li>
+        <li>表示された URL を<strong>まず先生が開き</strong>、「初期設定を開始する」を押します。
+          押した人がそのクラスの最初の先生になります。</li>
+        <li>そのあとで、URL を児童に配ります。</li>
+      </ol>
+
+      <figure class="shot--wide">
+        <img src="note/images/01-setup.png" width="2560" height="1720"
+             alt="初期設定の画面。「初期設定を開始する」ボタンが中央にある" loading="lazy" decoding="async">
+        <figcaption>このボタンを押した人が、最初の先生になります。ほかの先生は、あとから設定（⚙）で足せます。</figcaption>
+      </figure>
+
+      <div class="callout callout--warn">
+        <p><strong>「アクセスできるユーザー」に「全員（匿名ユーザーを含む）」を選ばないでください。</strong>
+          このアプリは、誰が先生で誰がどの児童かを、ログイン中の Google アカウントのメールアドレスで
+          見分けています。「全員」にするとサーバーがメールアドレスを取れなくなり、
+          先生の判定も、児童の記録の結びつけも働きません。</p>
+      </div>
+
+      <div class="callout">
+        <p><strong>コードは、コピーしたファイルの中に入っています。</strong>
+          貼り付ける作業はありません。学習の記録もそのファイルの中に入るので、
+          どこにできたのかを探す必要もありません。</p>
+      </div>
+
+      <h2 id="start">児童の端末に入れる</h2>
+      <p>ブラウザで先生の URL を開いたまま使ってもかまいませんが、この端末に「アプリ」として
+        入れることもできます。先生から聞いた URL を一度だけ入れると、次からはアイコンから開けます。</p>
+
+      <div class="start-card">
+        <label for="gas-url">先生から配られた URL</label>
+        <input type="url" id="gas-url" placeholder="https://script.google.com/macros/s/........./exec"
+               autocomplete="off" spellcheck="false">
+        <div class="setup-hint">「デプロイ」で発行された <code>/exec</code> で終わる URL です。</div>
+        <div class="setup-error" id="setup-error" role="alert"></div>
+
+        <button class="btn btn--primary btn--block" id="btn-save" type="button">アプリをはじめる</button>
+
+        <!-- インストールボタン。案内できるときだけ出る（app.js で制御）。 -->
+        <button class="btn btn--block btn-install" id="btn-install" type="button">
+          この端末にアプリとして入れる
+        </button>
+
+        <!-- iPhone / iPad には beforeinstallprompt が無いので手順を案内する -->
+        <div class="ios-hint" id="ios-hint">
+          <strong>iPhone・iPad の場合</strong><br>
+          画面下の「共有」ボタン（□に↑）を押し、
+          「ホーム画面に追加」を選ぶとアプリとして使えます。
+        </div>
+
+        <div id="extra-actions">
+          <a class="btn" href="#" id="link-open-tab" target="_blank" rel="noopener">新しいタブで開く</a>
+          <button class="btn" id="btn-clear" type="button">設定をリセット</button>
+        </div>
+      </div>
+
+      <p class="setup-hint">クラス全員に配るときは、この URL の後ろに設定を付けたリンク
+        <code>https://mirai-compass.giga-school.com/?app=（先生の URL）</code>
+        を Classroom や QR コードで配ると、子どもは開くだけで設定が終わります。
+        設定を変えるときは、画面の左上すみを素早く5回タップしてください。</p>
+
+      <h2>情報担当の先生へ</h2>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr>
+              <th>フィルタリングで通すもの</th>
+              <td>アプリ本体が置かれる <code>script.google.com</code> と
+                <code>googleusercontent.com</code>、このページの <code>github.io</code> です。
+                生成AIを使う場合だけ Gemini のアドレスも要ります。</td>
+            </tr>
+            <tr>
+              <th>画面を作る部品</th>
+              <td>外から読み込みません。必要なものはすべてアプリの中に持っています。
+                校内のフィルタリングで配信元が塞がれても画面は出ます。</td>
+            </tr>
+            <tr>
+              <th>データの置き場所</th>
+              <td>公開した先生ご自身の Google ドライブにあるスプレッドシート1つだけ。
+                外部のサービスへは何も送りません。制作者もデータを見られません。</td>
+            </tr>
+            <tr>
+              <th>本人確認</th>
+              <td>その端末でログインしている Google アカウントで行います。パスワードはありません。
+                誰が先生かはメールアドレスの許可リストで決まります。
+                先生専用の処理は、画面のボタンを隠すのではなくサーバー側で確かめています。</td>
+            </tr>
+            <tr>
+              <th>児童が入れる情報</th>
+              <td>氏名・クラス・出席番号と、学習の記録です。名簿にメールアドレスを入れておくと、
+                同じ名前の子がいても記録が混ざりません（空欄でも動きます）。</td>
+            </tr>
+            <tr>
+              <th>費用・アカウント登録</th>
+              <td>どちらもありません。MIT ライセンスで公開しています。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>シートを点検する</h3>
+      <p>コピーしたスプレッドシートを開くと、上のメニューに「みらいコンパス」が出ます。
+        「シートを点検する」を押すと、中の作りがアプリの想定どおりかを確かめられます。
+        足りないシートや見出しは「足りないシート・見出しを直す」で足せます
+        （アプリの設定 ⚙ →「データベースの点検」からも同じことができます）。</p>
+      <p>ワークシートと答案は<strong>列の番号</strong>で読み書きしています。
+        誤字の修正や行の削除はしていただいて構いませんが、<strong>列の並びは変えないでください。</strong>
+        並びがずれているときは、アプリは書き換えずに「何列目がどうずれているか」だけをお知らせします。
+        中身が付いてくるので、機械では直せないためです。</p>
+
+      <h3>できないこと</h3>
+      <p>正直に書いておきます。更新はこちらから一斉に配れません。
+        アプリを直したときは、先生に貼り替えかコピーのやり直しをお願いすることになります。
+        オフラインでは使えません（画面の外枠だけが残ります）。
+        「全員（匿名を含む）」での公開には対応していません。</p>
+    </main>
+
+    <footer>
+      <p>
+        <a href="https://giga-school.com/">GIGA school トップ</a>　/　
+        <a href="https://giga-school.com/apps/mirai-compass/">紹介記事</a>　/　
+        <a href="https://github.com/GIGAyama/MIRAI-Compass" rel="noopener">GitHub</a>　/　
+        <a href="privacy.html">プライバシーポリシー</a>　/　
+        <a href="terms.html">利用規約</a>
       </p>
-
-      <label for="gas-url">ウェブアプリURL</label>
-      <input type="url" id="gas-url" placeholder="https://script.google.com/macros/s/........./exec"
-             autocomplete="off" spellcheck="false">
-      <div class="setup-hint">「デプロイ」で発行された <code>/exec</code> で終わるURLです。</div>
-      <div class="setup-error" id="setup-error" role="alert"></div>
-
-      <button class="btn btn-primary" id="btn-save" type="button">アプリをはじめる</button>
-
-      <!-- インストールボタン。案内できるときだけ出る（app.js で制御）。 -->
-      <button class="btn btn-install" id="btn-install" type="button">
-        この端末にアプリとして入れる
-      </button>
-
-      <!-- iPhone / iPad には beforeinstallprompt が無いので手順を案内する -->
-      <div class="ios-hint" id="ios-hint">
-        <strong>iPhone・iPad の場合</strong><br>
-        画面下の「共有」ボタン（□に↑）を押し、
-        「ホーム画面に追加」を選ぶとアプリとして使えます。
-      </div>
-
-      <div id="extra-actions" style="display:none; margin-top: 14px;">
-        <a class="btn btn-secondary" href="#" id="link-open-tab" target="_blank" rel="noopener">新しいタブで開く</a>
-        <button class="btn btn-secondary" id="btn-clear" type="button">設定をリセット</button>
-      </div>
-
-      <div class="setup-footer">
-        <a href="terms.html">利用規約</a>　/　<a href="privacy.html">プライバシーポリシー</a><br>
-        &copy; 2026 みらいコンパス Project
-      </div>
-    </div>
+      <p>みらいコンパス（mirai-compass.giga-school.com）／ GIGAyama</p>
+    </footer>
   </div>
 
   <!-- 更新の案内。押されるまで新しい版に切り替えない。 -->

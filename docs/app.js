@@ -54,11 +54,15 @@ function clearUrl() {
 // 画面切り替え
 // ---------------------------------------------------------------------------
 
+// ★ 表示の切り替えは <body> のクラス1つで行う。
+//   このページは、URL を覚えていない端末では「導入案内のページ」として読まれ、
+//   覚えている端末では全画面のアプリになる。案内はスクロールできないと読めず、
+//   アプリは固定されていないと iPad で下端が動くので、CSS 側で分けている
+//   （app-mode のときだけ 100dvh + overflow:hidden）。
 function showApp(url) {
   var frame = document.getElementById('app-frame');
-  frame.src = url;
-  frame.style.display = 'block';
-  document.getElementById('setup-screen').style.display = 'none';
+  if (frame.src !== url) frame.src = url;
+  document.body.classList.add('app-mode');
 }
 
 function showSetup(prefillUrl) {
@@ -68,8 +72,13 @@ function showSetup(prefillUrl) {
     document.getElementById('extra-actions').style.display = 'block';
     document.getElementById('link-open-tab').href = stored;
   }
-  document.getElementById('setup-screen').style.display = 'flex';
-  document.getElementById('app-frame').style.display = 'none';
+  var wasApp = document.body.classList.contains('app-mode');
+  document.body.classList.remove('app-mode');
+  // アプリから設定を開いたときは、案内の先頭ではなく入力欄へ連れていく
+  if (wasApp) {
+    var start = document.getElementById('start');
+    if (start && start.scrollIntoView) start.scrollIntoView();
+  }
 }
 
 // ---------------------------------------------------------------------------

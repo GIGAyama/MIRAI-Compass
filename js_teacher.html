@@ -193,6 +193,83 @@ function openWorksheetSubmissions(taskId) {
 }
 
 /**
+ * [モーダル] データベースの点検（設定 ⚙ →「データベースの点検」）
+ *
+ * スプレッドシートのコピーで配る形にしたため、先生の手元のファイルは
+ * 誤って列を消したり並べ替えたりできる。ワークシートと答案は列の番号で
+ * 読み書きしているので、1列ずれるだけで児童の手書きと先生の赤ペンが
+ * 入れかわる。ここで「どこがどうずれているか」を先に見えるようにする。
+ *
+ * 「直す」で行うのは足すことだけ（シートを作る・見出しを書く・末尾に足す）。
+ * 並びのずれは、直さずに場所を知らせる。中身が付いてくるので機械では直せない。
+ */
+function openDatabaseHealth() {
+  runTeacher('getDatabaseHealth', [], function (res) {
+    if (!res || !res.success) { handleError({ message: (res && res.error) || '点検できませんでした' }); return; }
+    renderDatabaseHealth(res);
+  });
+}
+
+function describeDbFindings(findings) {
+  if (!findings || !findings.length) {
+    return '<div class="alert alert-success mb-0">シートの作りは想定どおりです。</div>';
+  }
+  var rows = findings.map(function (f) {
+    var badge = f.fixable
+      ? '<span class="badge bg-warning text-dark">直せます</span>'
+      : '<span class="badge bg-danger">手で直してください</span>';
+    return '<li class="list-group-item">'
+      + '<div class="d-flex justify-content-between align-items-start gap-2">'
+      + '<div><span class="fw-bold">' + escapeHtml(f.sheet) + '</span>'
+      + ' <span class="text-muted small">' + escapeHtml(f.kind) + '</span></div>'
+      + badge + '</div>'
+      + '<div class="small mt-1">' + escapeHtml(f.detail) + '</div>'
+      + '</li>';
+  }).join('');
+  return '<ul class="list-group list-group-flush text-start">' + rows + '</ul>';
+}
+
+function renderDatabaseHealth(res) {
+  var findings = res.findings || [];
+  var canFix = findings.some(function (f) { return f.fixable; });
+  var where = res.isBound
+    ? 'このアプリが束ねられているスプレッドシートを見ています。'
+    : 'スクリプトに登録されているスプレッドシートを見ています。';
+  Swal.fire({
+    title: 'データベースの点検',
+    html: '<div class="text-start">'
+      + '<p class="small text-muted">' + where
+      + (res.ssUrl ? ' <a href="' + escapeHtml(res.ssUrl) + '" target="_blank" rel="noopener">ファイルを開く</a>' : '')
+      + '</p>'
+      + describeDbFindings(findings)
+      + '<p class="small text-muted mt-3 mb-0">列の並びは変えないでください。'
+      + 'ワークシートと答案は列の番号で読み書きしています。</p>'
+      + '</div>',
+    width: '640px',
+    showCloseButton: true,
+    showConfirmButton: canFix,
+    confirmButtonText: '足りないシート・見出しを直す',
+    showCancelButton: true,
+    cancelButtonText: '閉じる'
+  }).then(function (r) {
+    if (!r.isConfirmed) return;
+    runTeacher('repairDatabase', [], function (out) {
+      if (!out || !out.success) { handleError({ message: (out && out.error) || '直せませんでした' }); return; }
+      var done = (out.done || []);
+      Swal.fire({
+        title: done.length ? '直しました' : '足すものはありませんでした',
+        html: '<div class="text-start">'
+          + (done.length ? '<ul class="small">' + done.map(function (d) { return '<li>' + escapeHtml(d) + '</li>'; }).join('') + '</ul>' : '')
+          + describeDbFindings(out.findings || [])
+          + '</div>',
+        width: '640px',
+        icon: done.length ? 'success' : 'info'
+      });
+    });
+  });
+}
+
+/**
  * [モーダル] 先生の管理（メールアドレスの許可リスト）
  * 現在の先生一覧を表示し、追加・削除できる。
  */
