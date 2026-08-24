@@ -22,7 +22,7 @@ const CACHE_PREFIX = 'mirai-compass-shell-';
 //    手書きだったころは「リリースごとに必ず上げる」が人の仕事で、
 //    2026-08-21 に12リポジトリで同時に上げ忘れる事故が起きた。上げ忘れると
 //    古いシェルのキャッシュが掃除されず、直した画面が端末に一度も届かない。
-const APP_VERSION = 'vb2976cd2'; /* __APP_VERSION__ */
+const APP_VERSION = 'vfb9ae877'; /* __APP_VERSION__ */
 const CACHE_VERSION = CACHE_PREFIX + APP_VERSION;
 
 // キャッシュするシェル資産（すべて相対パス = GitHub Pages のサブパス配信に対応）

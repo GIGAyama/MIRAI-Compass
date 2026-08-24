@@ -279,10 +279,13 @@
     @media (forced-colors: active) {
       .btn, .start-card, .callout, input[type="url"], figure img { border: 2px solid ButtonText; }
     }
-    @media print {
-      .actions, .shots, .shot--wide, .start-card, #offline-bar, #update-bar { display: none; }
-      body { color: #000; }
-    }
+    /* ⚠️ このページに印刷用のメディアクエリを足さないこと（語そのものも書かない）。
+       印刷 CSS の検査（GAS_PRINT_CSS）は quality.config.json の styleFiles を
+       OR で見ており、自己診断（npm run check:self）は css.html だけを壊して
+       「検査がちゃんと落ちるか」を確かめる。この案内ページ側にも印刷の指定があると、
+       css.html を壊しても検査が通ってしまい、**検査が何も見ていない状態に気づけなくなる**。
+       検査は中身を正規表現で見るので、コメントに語を書くだけでも同じことが起きる。
+       印刷して配るのはワークシートなので、印刷の指定は css.html に置く。 */
   </style>
 </head>
 <body>
