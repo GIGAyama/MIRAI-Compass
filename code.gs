@@ -163,18 +163,57 @@ var MiraiAuth = (function () {
     _save(list);
     return list;
   }
-  // 初期化時のブートストラップ: 一覧が空なら、初期化を実行した本人を最初の先生にする。
+  /**
+   * このアプリをデプロイした本人のメールアドレス。
+   *
+   * ウェブアプリは「実行するユーザー: 自分（所有者）」でデプロイするので、
+   * Session.getEffectiveUser() は **訪問者ではなく、デプロイした先生** を指す。
+   * getActiveUser()（＝いま開いている人）と取りちがえないこと。
+   */
+  function deployerEmail() {
+    try { return String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase(); }
+    catch (e) { return ''; }
+  }
+
+  /**
+   * デプロイした本人を、最初の担任として自動で登録する。
+   *
+   * ■ なぜ訪問者ではなくデプロイ者なのか
+   *   訪問者（getActiveUser）で決めると「URL を先に開いた人が管理者になる」。
+   *   児童に配ったあとに先生がはじめて開く、という順番はふつうに起こりうるので、
+   *   そこで児童が管理者になってしまう。デプロイした本人なら順番に依存しない。
+   *
+   * ■ 先生が1人でもいれば何もしない
+   *   あとから先生を入れ替えた学級で、デプロイ者が復活しては困る。
+   *
+   * ■ 取れないときは何もしない
+   *   画面側が「初期設定を開始する」ボタンに落ちる。黙って先着を管理者にはしない。
+   *
+   * 40 台が一斉に開くと同時に呼ばれるが、書く値はどの経路でも同じ1つなので、
+   * 競っても結果は変わらない（ロックを取る価値がない）。
+   */
+  function ensureDeployerRegistered() {
+    if (_list().length) return _list();
+    var dep = deployerEmail();
+    if (!dep) return _list();
+    _save([dep]);
+    return _list();
+  }
+
+  // 初期化時のブートストラップ: 一覧が空なら最初の先生を決める。
+  // デプロイした本人が分かればその人、分からなければ実行した本人にする。
   function bootstrapFirstTeacher() {
     if (_list().length === 0) {
-      var me = currentEmail();
-      if (me) _save([me]);
+      var who = deployerEmail() || currentEmail();
+      if (who) _save([who]);
     }
     return _list();
   }
   return {
-    currentEmail: currentEmail, requireUser: requireUser,
+    currentEmail: currentEmail, requireUser: requireUser, deployerEmail: deployerEmail,
     isTeacher: isTeacher, requireTeacher: requireTeacher, teacherEmails: teacherEmails,
-    addTeacher: addTeacher, removeTeacher: removeTeacher, bootstrapFirstTeacher: bootstrapFirstTeacher
+    addTeacher: addTeacher, removeTeacher: removeTeacher,
+    bootstrapFirstTeacher: bootstrapFirstTeacher, ensureDeployerRegistered: ensureDeployerRegistered
   };
 })();
 
@@ -424,9 +463,19 @@ var MiraiDb = (function () {
    * 所有者を取れない環境（共有ドライブ・組織の制限）では判定できないので true を返し、
    * これまでどおり先着を最初の先生にする（前の配り方と同じふるまい）。
    */
-  function mayBecomeFirstTeacher(ss, email) {
+  /**
+   * 呼び出し元が、このファイルを持っている人かどうか。
+   *
+   *   'owner'   … 所有者または編集者だと**確かめられた**
+   *   'no'      … 持ち主の一覧は取れたが、その中にいない（＝児童）
+   *   'unknown' … 判定できない（メールが取れない／共有ドライブ／権限不足）
+   *
+   * 'unknown' と 'owner' を混ぜないこと。自動で管理者にしてよいのは 'owner' だけで、
+   * 'unknown' のときに自動登録すると「URL を先に開いた人が管理者になる」に戻る。
+   */
+  function ownershipOf(ss, email) {
     var me = String(email || '').trim().toLowerCase();
-    if (!me) return true;          // メールが取れない環境では判定できない
+    if (!me) return 'unknown';       // メールが取れない環境では判定できない
     var known = [];
     try {
       var owner = ss.getOwner();
@@ -435,8 +484,16 @@ var MiraiDb = (function () {
     try {
       ss.getEditors().forEach(function (u) { known.push(String(u.getEmail() || '').toLowerCase()); });
     } catch (e) { /* 権限が無ければ取れない */ }
-    if (!known.length) return true;   // 判定できないので止めない
-    return known.indexOf(me) !== -1;
+    if (!known.length) return 'unknown';
+    return known.indexOf(me) !== -1 ? 'owner' : 'no';
+  }
+
+  /**
+   * 「最初の先生」になってよい人かどうか。
+   * 判定できない環境では止めない（前の配り方と同じ、先着になる）。
+   */
+  function mayBecomeFirstTeacher(ss, email) {
+    return ownershipOf(ss, email) !== 'no';
   }
 
   /** 先生が中身を見に行くための URL。無ければ null。 */
@@ -448,7 +505,7 @@ var MiraiDb = (function () {
   return {
     isBound: isBound, isReady: isReady, open: open, tryOpen: tryOpen,
     tryId: tryId, url: url, ensure: ensure, inspect: inspect, repair: repair,
-    mayBecomeFirstTeacher: mayBecomeFirstTeacher,
+    mayBecomeFirstTeacher: mayBecomeFirstTeacher, ownershipOf: ownershipOf,
   };
 })();
 
@@ -552,6 +609,78 @@ function describeFindings_(found) {
 }
 
 /**
+ * セットアップ状況（設定 ⚙ →「セットアップ状況」）。先生だけ。
+ *
+ * ■ なぜ要るか
+ *   はじめかたガイドは3つ済むと消える。消えたあとは「いま何が整っていて
+ *   何が足りないのか」をどこからも確かめられない。とくに **公開設定の
+ *   取りちがえは、画面に何も出ないまま先生判定だけが働かなくなる**。
+ *   ここを1か所にまとめ、いつでも見に来られるようにする。
+ *
+ * ■ 返すもの
+ *   件数と真偽だけ。児童の氏名も学習記録も返さない
+ *   （先生の一覧だけは、自分がその中にいるか確かめる必要があるので返す）。
+ */
+function getSetupStatus() {
+  try {
+    MiraiAuth.requireTeacher();
+    var ss = MiraiDb.open();
+    var me = MiraiAuth.currentEmail();
+
+    var roster = fetchSheetData(ss, DB_SCHEMA.StudentRoster.name);
+    var classes = {};
+    var activeCount = 0;
+    roster.forEach(function (r) {
+      var name = String(r[3] || '').trim();
+      if (!name) return;
+      var active = (r[4] === true || r[4] === 'TRUE' || r[4] === '');
+      if (!active) return;
+      activeCount++;
+      var cls = String(r[1] || '').trim();
+      if (cls) classes[cls] = true;
+    });
+
+    var units = {};
+    fetchSheetData(ss, DB_SCHEMA.UnitMaster.name).forEach(function (r) {
+      var id = String(r[0] || '').trim();
+      // deletedAt（G列）が入っている行は消された課題。単元の数には入れない
+      if (id && !String(r[6] || '').trim()) units[id] = true;
+    });
+
+    var today = Utilities.formatDate(new Date(), 'JST', 'yyyy-MM-dd');
+    var upcoming = 0;
+    fetchSheetData(ss, DB_SCHEMA.ClassSchedule.name).forEach(function (r) {
+      if (normalizeDateStr(r[2]) >= today) upcoming++;
+    });
+
+    var props = PropertiesService.getScriptProperties();
+
+    return createSuccessResponse({
+      status: {
+        // ★ いちばん静かに壊れるところ。メールが取れていなければ、
+        //    デプロイの「アクセスできるユーザー」がドメイン外を含んでいる。
+        identity: { email: me, resolved: !!me },
+        database: {
+          bound: MiraiDb.isBound(),
+          url: MiraiDb.url(),
+          findings: MiraiDb.inspect(ss)
+        },
+        teachers: { count: MiraiAuth.teacherEmails().length, includesMe: MiraiAuth.isTeacher() },
+        roster: { activeCount: activeCount, classCount: Object.keys(classes).length },
+        units: { count: Object.keys(units).length },
+        schedule: { upcomingCount: upcoming },
+        ai: {
+          hasApiKey: !!props.getProperty('GEMINI_API_KEY'),
+          modelName: String(props.getProperty('GEMINI_MODEL_NAME') || '').trim()
+        }
+      }
+    });
+  } catch (e) {
+    return createErrorResponse(e);
+  }
+}
+
+/**
  * アプリの設定画面から呼ぶ点検。先生だけ。
  * 返すのはシート名と見出しの並びだけで、児童のデータは含まない。
  */
@@ -595,13 +724,36 @@ function repairDatabase() {
  */
 function getAppInitialData() {
   try {
+    // ★ ゼロコンフィグの中心。
+    //   デプロイした本人を、最初の担任として自動で登録する。
+    //   ウェブアプリは「実行するユーザー: 自分」で動くので、誰が開いていても
+    //   登録されるのはデプロイした先生である。押すボタンは要らない。
+    //   すでに先生がいれば何もしない。
+    MiraiAuth.ensureDeployerRegistered();
+
+    var needsFirstTeacher = MiraiAuth.teacherEmails().length === 0;
+
+    // ここへ来るのは、デプロイ者のメールが取れなかったときだけ（組織の制限など）。
+    // その場合にかぎり、これまでどおり「初期設定を開始する」ボタンに落とす。
+    // 誰がこのファイルを持っているかは、そのときにしか要らない
+    // （毎回 getOwner()/getEditors() を叩くと、40 台の同時起動で Drive を無駄に呼ぶ）。
+    var ownership = 'unknown';
+    if (needsFirstTeacher) {
+      var ss = MiraiDb.tryOpen();
+      if (ss) ownership = MiraiDb.ownershipOf(ss, MiraiAuth.currentEmail());
+    }
+
     return createSuccessResponse({
       isInitialized: MiraiDb.isReady(),
       isBound: MiraiDb.isBound(),
-      // 先生が1人も登録されていないうちは、配り方によらず初期設定画面を出す。
+      // 先生が1人も登録されていないうちは、配り方によらず入口を出し分ける。
       // コンテナバインドではデータベースが最初から在るため、これが無いと
-      // 「最初の先生を決める」画面にたどり着けない。
-      needsFirstTeacher: MiraiAuth.teacherEmails().length === 0,
+      // 「最初の先生を決める」ところにたどり着けない。
+      needsFirstTeacher: needsFirstTeacher,
+      // 'owner' … コピーを作った先生本人だと確かめられた。画面を出さずに自動で登録してよい
+      // 'no'    … 児童。先生の準備待ちを案内する
+      // 'unknown' … 判定できない。これまでどおりボタンを押してもらう
+      ownership: ownership,
       ssUrl: MiraiDb.url()
     });
   } catch (e) {

@@ -2,7 +2,7 @@
   ⚠️ このファイルは tools/build-vendor.mjs が生成しています。手で編集しないでください。
      直す場所は package.json（版）と tools/build-vendor.mjs（組み立て方）です。
      直したら必ず `npm run build` を走らせてから push してください。
-     中身: bootstrap-icons から 111 個（使用分のみ）
+     中身: bootstrap-icons から 112 個（使用分のみ）
 -->
 <style>
 /* bootstrap-icons のうち、このアプリが実際に使っている分だけ。
@@ -44,6 +44,7 @@ background-color:currentColor;
 .bi-collection-fill{--bi-i:url("data:image/svg+xml,%3Csvg fill='currentColor' xmlns='http://www.w3.org/2000/svg' width='16' height='16' class='bi bi-collection-fill' viewBox='0 0 16 16'%3E %3Cpath d='M0 13a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 16 13V6a1.5 1.5 0 0 0-1.5-1.5h-13A1.5 1.5 0 0 0 0 6v7zM2 3a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 0-1h-11A.5.5 0 0 0 2 3zm2-2a.5.5 0 0 0 .5.5h7a.5.5 0 0 0 0-1h-7A.5.5 0 0 0 4 1z'/%3E %3C/svg%3E")}
 .bi-compass{--bi-i:url("data:image/svg+xml,%3Csvg fill='currentColor' xmlns='http://www.w3.org/2000/svg' width='16' height='16' class='bi bi-compass' viewBox='0 0 16 16'%3E %3Cpath d='M8 16.016a7.5 7.5 0 0 0 1.962-14.74A1 1 0 0 0 9 0H7a1 1 0 0 0-.962 1.276A7.5 7.5 0 0 0 8 16.016zm6.5-7.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z'/%3E %3Cpath d='m6.94 7.44 4.95-2.83-2.83 4.95-4.949 2.83 2.828-4.95z'/%3E %3C/svg%3E")}
 .bi-compass-fill{--bi-i:url("data:image/svg+xml,%3Csvg fill='currentColor' xmlns='http://www.w3.org/2000/svg' width='16' height='16' class='bi bi-compass-fill' viewBox='0 0 16 16'%3E %3Cpath d='M15.5 8.516a7.5 7.5 0 1 1-9.462-7.24A1 1 0 0 1 7 0h2a1 1 0 0 1 .962 1.276 7.503 7.503 0 0 1 5.538 7.24zm-3.61-3.905L6.94 7.439 4.11 12.39l4.95-2.828 2.828-4.95z'/%3E %3C/svg%3E")}
+.bi-dash-circle{--bi-i:url("data:image/svg+xml,%3Csvg fill='currentColor' xmlns='http://www.w3.org/2000/svg' width='16' height='16' class='bi bi-dash-circle' viewBox='0 0 16 16'%3E %3Cpath d='M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z'/%3E %3Cpath d='M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8z'/%3E %3C/svg%3E")}
 .bi-dash-lg{--bi-i:url("data:image/svg+xml,%3Csvg fill='currentColor' xmlns='http://www.w3.org/2000/svg' width='16' height='16' class='bi bi-dash-lg' viewBox='0 0 16 16'%3E %3Cpath fill-rule='evenodd' d='M2 8a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11A.5.5 0 0 1 2 8Z'/%3E %3C/svg%3E")}
 .bi-easel-fill{--bi-i:url("data:image/svg+xml,%3Csvg fill='currentColor' xmlns='http://www.w3.org/2000/svg' width='16' height='16' class='bi bi-easel-fill' viewBox='0 0 16 16'%3E %3Cpath d='M8.473.337a.5.5 0 0 0-.946 0L6.954 2H2a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1.85l-1.323 3.837a.5.5 0 1 0 .946.326L4.908 11H7.5v2.5a.5.5 0 0 0 1 0V11h2.592l1.435 4.163a.5.5 0 0 0 .946-.326L12.15 11H14a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H9.046L8.473.337z'/%3E %3C/svg%3E")}
 .bi-emoji-smile{--bi-i:url("data:image/svg+xml,%3Csvg fill='currentColor' xmlns='http://www.w3.org/2000/svg' width='16' height='16' class='bi bi-emoji-smile' viewBox='0 0 16 16'%3E %3Cpath d='M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z'/%3E %3Cpath d='M4.285 9.567a.5.5 0 0 1 .683.183A3.498 3.498 0 0 0 8 11.5a3.498 3.498 0 0 0 3.032-1.75.5.5 0 1 1 .866.5A4.498 4.498 0 0 1 8 12.5a4.498 4.498 0 0 1-3.898-2.25.5.5 0 0 1 .183-.683zM7 6.5C7 7.328 6.552 8 6 8s-1-.672-1-1.5S5.448 5 6 5s1 .672 1 1.5zm4 0c0 .828-.448 1.5-1 1.5s-1-.672-1-1.5S9.448 5 10 5s1 .672 1 1.5z'/%3E %3C/svg%3E")}

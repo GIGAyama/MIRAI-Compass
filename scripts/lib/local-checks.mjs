@@ -85,6 +85,11 @@ export function buildLocalChecks(cfg) {
           'generateRubricAI', 'generateBatchComments', 'getDashboardData', 'getTaskSubmissions',
           'getSubmissionDetail', 'saveAiConfig', 'createWorksheetsForUnit', 'saveClassRoster',
           'deleteUnitTask', 'createNewUnit', 'importUnitJson', 'archiveUnitData',
+          // スプレッドシートのコピーで配る形にしたときに足した、先生専用の API。
+          // google.script.run はトップレベル関数を誰でも呼べるので、1つ抜けると境界が破れる。
+          // （メニューから呼ぶ showSheetCheck / repairSheetsFromMenu はここに入れない。
+          //   あちらは先に SpreadsheetApp.getUi() を取って、画面が無い文脈で止める作り）
+          'getSetupStatus', 'getDatabaseHealth', 'repairDatabase',
         ];
         const bad = [];
         for (const fn of fns) {

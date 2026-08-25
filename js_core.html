@@ -211,16 +211,72 @@ function handleInitialResponse(res) {
   const btnSs = document.getElementById('btn-view-ss');
   if (btnSs && ssUrl) btnSs.onclick = () => window.open(ssUrl, '_blank');
 
-  // システム未初期化の場合。
-  // コンテナバインド（スプレッドシートのコピーで配った形）では、束ねられている
-  // そのファイルがデータベースなので isInitialized は常に true になる。
-  // それでも最初の1回は「最初の先生」を決める必要があるので、
-  // サーバーが先生を1人も知らないうちは初期設定画面を出す。
-  if (!res.isInitialized || res.needsFirstTeacher) {
-    renderSetupOverlay(!!res.isBound); // 初期設定画面を表示
-  } else {
-    loadMainData();       // メインデータを読み込み開始
+  // まだ整っていないときの出し分け。
+  //
+  // ふつうはここへ来ない。サーバーが getAppInitialData の先頭で
+  // **デプロイした先生を自動的に担任として登録している**（MiraiAuth.
+  // ensureDeployerRegistered）ので、needsFirstTeacher は false で返る。
+  // 先生はコピーしてデプロイし、URL を開くだけで使いはじめられる。
+  //
+  // 以下は、デプロイ者のメールアドレスが取れなかったとき（組織の制限など）の道。
+  if (res.isInitialized && !res.needsFirstTeacher) {
+    loadMainData();
+    return;
   }
+
+  if (res.ownership === 'owner') {
+    autoRegisterFirstTeacher();   // 画面を出さずに登録して、そのまま始める
+  } else if (res.ownership === 'no') {
+    renderWaitingForTeacher();    // 児童。先生の準備待ちを案内する
+  } else {
+    // 持ち主を確かめられない（共有ドライブ・組織の制限・メールが取れない）。
+    // ここで自動登録すると「先に開いた人が管理者になる」になってしまうので、
+    // これまでどおり、意図した操作としてボタンを押してもらう。
+    renderSetupOverlay(!!res.isBound);
+  }
+}
+
+/**
+ * [機能] 最初の先生の自動登録。
+ * 呼ぶのは ownership === 'owner'（＝このファイルの所有者・編集者だと
+ * サーバーが確かめられた）ときだけ。サーバー側の initSystem も
+ * MiraiDb.mayBecomeFirstTeacher で同じ条件を見ているので、
+ * クライアントを書き換えても通らない。
+ */
+function autoRegisterFirstTeacher() {
+  showLoading();
+  google.script.run
+    .withSuccessHandler(r => {
+      if (!r.success) {
+        // 自動で通らなかったときは、黙って止まらずボタンに落とす
+        renderSetupOverlay(true);
+        return;
+      }
+      loadMainData();
+      if (typeof showToast === 'function') {
+        showToast('success', 'このアプリの管理者として登録しました');
+      }
+    })
+    .withFailureHandler(() => renderSetupOverlay(true))
+    .initSystem();
+}
+
+/**
+ * [画面描画] 児童が、先生より先に URL を開いたとき。
+ * 「初期設定を開始する」を見せると、押せないボタンを押させることになる。
+ */
+function renderWaitingForTeacher() {
+  const container = document.getElementById('app-container');
+  container.innerHTML = `
+    <div class="d-flex flex-column justify-content-center align-items-center vh-100 text-center">
+      <div class="card p-5 shadow-lg border-0 rounded-4" style="max-width: 520px;">
+        <div class="display-6 mb-3" aria-hidden="true">🧭</div>
+        <h1 class="h4 text-primary mb-3 fw-bold">もうすこし まってね</h1>
+        <p class="mb-0">先生が じゅんびを おわらせると つかえるようになります。<br>
+        じゅんびが すんだら、この ページを もういちど ひらいてください。</p>
+      </div>
+    </div>`;
+  hideLoading();
 }
 
 /**
@@ -994,6 +1050,8 @@ function toggleSettings() {
     html: `
       <div class="text-start">
         <div class="d-grid gap-2">
+          <button class="btn btn-primary btn-sm" onclick="openSetupStatus()">セットアップ状況をみる</button>
+          <hr class="my-1">
           <button class="btn btn-outline-secondary btn-sm" onclick="openTeacherManager()">先生の管理（メールアドレス）</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="openAiSettings()">AI設定（Geminiキー・モデル）</button>
           <button class="btn btn-outline-secondary btn-sm" onclick="openRosterManagerModal()">名簿管理</button>
