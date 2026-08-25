@@ -193,6 +193,129 @@ function openWorksheetSubmissions(taskId) {
 }
 
 /**
+ * [モーダル] セットアップ状況（設定 ⚙ →「セットアップ状況」）
+ *
+ * はじめかたガイド（renderTeacherSetupGuideHtml）は3つ済むと消える。
+ * 消えたあとは「いま何が整っていて何が足りないのか」をどこからも確かめられない。
+ * とくに **デプロイの公開設定の取りちがえは、画面に何も出ないまま
+ * 先生判定だけが働かなくなる**。ここを1か所にまとめ、いつでも見に来られるようにする。
+ *
+ * スプレッドシートを直接使うことは妨げない。データを手で直したい先生はいるし、
+ * 表計算として扱えることは利点でもある。危ないのは列の並びだけなので、そこだけ言う。
+ */
+function openSetupStatus() {
+  runTeacher('getSetupStatus', [], function (res) {
+    if (!res || !res.success) { handleError({ message: (res && res.error) || '状況を読めませんでした' }); return; }
+    renderSetupStatus(res.status || {});
+  });
+}
+
+/** 1行ぶんの HTML。level は 'ok' | 'warn' | 'ng'。 */
+function setupRow(level, title, detail, actionHtml) {
+  var mark = { ok: 'bi-check-circle-fill text-success',
+               warn: 'bi-exclamation-triangle-fill text-warning',
+               ng: 'bi-x-circle-fill text-danger' }[level] || 'bi-dash-circle text-secondary';
+  return '<li class="list-group-item d-flex align-items-start gap-3 px-0">'
+    + '<i class="bi ' + mark + ' mt-1 flex-shrink-0" aria-hidden="true"></i>'
+    + '<div class="flex-grow-1">'
+    + '<div class="fw-bold small">' + title + '</div>'
+    + '<div class="x-small text-muted">' + detail + '</div>'
+    + '</div>'
+    + (actionHtml ? '<div class="flex-shrink-0">' + actionHtml + '</div>' : '')
+    + '</li>';
+}
+
+function renderSetupStatus(st) {
+  var btn = function (label, onclick) {
+    return '<button class="btn btn-outline-primary btn-sm rounded-pill px-3" onclick="Swal.close(); ' + onclick + '">' + label + '</button>';
+  };
+  var rows = [];
+
+  // ── 1. 本人確認。ここが崩れていると、ほかが全部そろっていても先生になれない
+  var idt = st.identity || {};
+  if (idt.resolved) {
+    rows.push(setupRow('ok', 'ログインの確認',
+      escapeHtml(idt.email) + ' として認識しています。', ''));
+  } else {
+    rows.push(setupRow('ng', 'ログインの確認 — <span class="text-danger">要対応</span>',
+      'サーバーがあなたのメールアドレスを取得できていません。'
+      + '<strong>デプロイの「アクセスできるユーザー」が、学校のドメイン外を含む設定になっています。</strong>'
+      + 'Apps Script の「デプロイを管理」で、学校のドメイン名が書かれた選択肢に変えてください'
+      + '（「全員」「全員（匿名ユーザーを含む）」はどちらも使えません）。', ''));
+  }
+
+  // ── 2. データベース。ゼロコンフィグの土台。シートは自動で作られる
+  var db = st.database || {};
+  var findings = db.findings || [];
+  var dbOpen = db.url ? '<a class="btn btn-outline-secondary btn-sm rounded-pill px-3" href="' + escapeHtml(db.url) + '" target="_blank" rel="noopener">開く</a>' : '';
+  if (!findings.length) {
+    rows.push(setupRow('ok', 'データベース',
+      (db.bound ? 'このアプリが束ねられているスプレッドシートを使っています。' : 'スクリプトに登録されたスプレッドシートを使っています。')
+      + 'シートと見出しは想定どおりです。<br>'
+      + '<span class="text-muted">データを直接編集して構いません。<strong>列の並びだけ変えないでください。</strong></span>', dbOpen));
+  } else {
+    var fixable = findings.some(function (f) { return f.fixable; });
+    rows.push(setupRow(fixable ? 'warn' : 'ng', 'データベース — ' + findings.length + ' 件の指摘',
+      findings.map(function (f) { return '「' + escapeHtml(f.sheet) + '」' + escapeHtml(f.kind); }).join('、'),
+      btn('点検をひらく', 'openDatabaseHealth()')));
+  }
+
+  // ── 3〜7. 以下はアプリの中だけで完結する。スプレッドシートを開く必要はない
+  var t = st.teachers || {};
+  rows.push(setupRow(t.count > 0 ? 'ok' : 'ng', '先生の登録',
+    t.count > 0
+      ? t.count + ' 人が登録されています。' + (t.includesMe ? '' : '<strong class="text-danger">あなたは含まれていません。</strong>')
+      : 'まだ誰も登録されていません。',
+    btn('先生を管理', 'openTeacherManager()')));
+
+  var r = st.roster || {};
+  rows.push(setupRow(r.activeCount > 0 ? 'ok' : 'ng', '名簿',
+    r.activeCount > 0
+      ? r.activeCount + ' 人 / ' + r.classCount + ' クラス が登録されています。'
+      : 'まだ登録されていません。児童はログインできません。',
+    btn(r.activeCount > 0 ? '名簿をひらく' : '名簿をとうろく', 'openRosterManagerModal()')));
+
+  var u = st.units || {};
+  rows.push(setupRow(u.count > 0 ? 'ok' : 'ng', '単元',
+    u.count > 0 ? u.count + ' 件の単元があります。' : 'まだありません。テンプレートを選ぶだけで作れます。',
+    btn(u.count > 0 ? '単元をひらく' : 'テンプレートを見る', 'openUnitManagerModal()')));
+
+  var sc = st.schedule || {};
+  rows.push(setupRow(sc.upcomingCount > 0 ? 'ok' : 'warn', '授業配信',
+    sc.upcomingCount > 0
+      ? '今日以降の配信が ' + sc.upcomingCount + ' 件あります。'
+      : '今日以降の配信がありません。児童の画面に「いまの授業」の案内が出ません。',
+    btn('配信画面へ', "setTeacherView('control')")));
+
+  var ai = st.ai || {};
+  rows.push(setupRow(ai.hasApiKey ? 'ok' : 'warn', 'AI 設定（任意）',
+    ai.hasApiKey
+      ? 'Gemini のキーが登録されています。' + (ai.modelName ? 'モデル: ' + escapeHtml(ai.modelName) : '')
+      : '未設定です。<strong>登録しなくてもアプリは動きます</strong>（ワークシートは手貼りで作れます）。',
+    btn('AI 設定', 'openAiSettings()')));
+
+  var ng = rows.filter(function (h) { return h.indexOf('text-danger') !== -1; }).length;
+  var head = ng
+    ? '<div class="alert alert-warning py-2 small mb-3">対応が必要なものがあります。</div>'
+    : '<div class="alert alert-success py-2 small mb-3">授業を始める準備は整っています。</div>';
+
+  Swal.fire({
+    title: 'セットアップ状況',
+    html: '<div class="text-start">' + head
+      + '<ul class="list-group list-group-flush">' + rows.join('') + '</ul>'
+      + '<p class="x-small text-muted mt-3 mb-0">スプレッドシート側での初期設定は要りません。'
+      + 'シートと見出しはアプリが自動でそろえます。'
+      + '上のメニュー「みらいコンパス」からも点検できます。</p>'
+      + '</div>',
+    width: '720px',
+    showCloseButton: true,
+    showConfirmButton: false,
+    showCancelButton: true,
+    cancelButtonText: '閉じる'
+  });
+}
+
+/**
  * [モーダル] データベースの点検（設定 ⚙ →「データベースの点検」）
  *
  * スプレッドシートのコピーで配る形にしたため、先生の手元のファイルは

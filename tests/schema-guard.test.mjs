@@ -252,6 +252,58 @@ test('余分な列は、消さずに「読みません」と知らせるだけ',
   assert.ok(ss.getSheetByName('Feedback').rows[0].includes('先生メモ'), '勝手に消さない');
 });
 
+/** MiraiAuth を、Session と PropertiesService の代役つきで取り出す。 */
+function loadMiraiAuth({ effective = '', active = '', stored = null } = {}) {
+  const store = { TEACHER_EMAILS: stored === null ? null : JSON.stringify(stored) };
+  const mod = extractModule('MiraiAuth', {
+    Session: {
+      getEffectiveUser: () => ({ getEmail: () => effective }),
+      getActiveUser: () => ({ getEmail: () => active }),
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (k) => store[k] ?? null,
+        setProperty: (k, v) => { store[k] = v; },
+      }),
+    },
+  });
+  return { mod, store };
+}
+
+test('担任として登録されるのは、URL を開いた人ではなくデプロイした先生', () => {
+  // ★ ここがゼロコンフィグの心臓。
+  //   ウェブアプリは「実行するユーザー: 自分」で動くので、
+  //   Session.getEffectiveUser() は訪問者ではなくデプロイした先生を指す。
+  //   訪問者（getActiveUser）で決めると、児童に URL を配ったあとに先生が
+  //   はじめて開いた場合、**先に開いた児童が管理者になってしまう**。
+  const { mod, store } = loadMiraiAuth({
+    effective: 'Sensei@example.ed.jp',      // デプロイした先生
+    active: 'child01@example.ed.jp',        // いま開いているのは児童
+  });
+
+  assert.deepEqual(mod.ensureDeployerRegistered(), ['sensei@example.ed.jp'],
+    '開いたのが児童でも、登録されるのは先生（小文字にそろえる）');
+  assert.equal(mod.currentEmail(), 'child01@example.ed.jp', '訪問者の判定は別物のまま');
+  assert.equal(JSON.parse(store.TEACHER_EMAILS)[0], 'sensei@example.ed.jp');
+});
+
+test('先生がすでにいるときは、デプロイ者を勝手に足し戻さない', () => {
+  // 担任が替わって入れ替えた学級で、デプロイした人が復活しては困る。
+  const { mod } = loadMiraiAuth({
+    effective: 'sensei@example.ed.jp',
+    stored: ['kouhinin@example.ed.jp'],
+  });
+  assert.deepEqual(mod.ensureDeployerRegistered(), ['kouhinin@example.ed.jp'], '触らない');
+});
+
+test('デプロイ者のメールが取れないときは、黙って誰かを登録しない', () => {
+  // 取れない＝組織の制限など。ここで訪問者を入れると「先に開いた人が管理者」に戻る。
+  // 何もせずに帰り、画面側が「初期設定を開始する」ボタンに落とす。
+  const { mod } = loadMiraiAuth({ effective: '', active: 'child01@example.ed.jp' });
+  assert.deepEqual(mod.ensureDeployerRegistered(), [], '1人も登録しない');
+  assert.equal(mod.isTeacher(), false, '訪問者が先生になっていない');
+});
+
 test('最初の先生になれるのは、そのファイルを持っている人だけ', () => {
   // コンテナバインドでは、コピーを作った先生だけが所有者・編集者になる。
   // 児童が先に URL を開いても「最初の先生」にはなれない。
@@ -269,4 +321,32 @@ test('最初の先生になれるのは、そのファイルを持っている�
 
   // メールが取れない（組織外アカウント）ときも止めない。
   assert.equal(MiraiDb.mayBecomeFirstTeacher(owned, ''), true);
+});
+
+test('「持ち主だと確かめられた」と「確かめられない」を混ぜない', () => {
+  // ★ ここがゼロコンフィグの安全弁。
+  //   画面を出さずに自動で管理者にしてよいのは 'owner' のときだけである。
+  //   'unknown'（共有ドライブ・権限不足・メールが取れない）を 'owner' と同じに
+  //   扱うと、**URL を先に開いた人が黙って管理者になる**。ボタンを出して
+  //   意図した操作にするのは、その1点のためだけにある。
+  const owned = {
+    getOwner: () => ({ getEmail: () => 'Sensei@example.ed.jp' }),
+    getEditors: () => [{ getEmail: () => 'kyoutou@example.ed.jp' }],
+  };
+  assert.equal(MiraiDb.ownershipOf(owned, 'sensei@example.ed.jp'), 'owner');
+  assert.equal(MiraiDb.ownershipOf(owned, 'kyoutou@example.ed.jp'), 'owner');
+  assert.equal(MiraiDb.ownershipOf(owned, 'child@example.ed.jp'), 'no', '児童だと分かる');
+
+  // 所有者も編集者も取れない → 判定できない。自動登録はしない
+  const opaque = { getOwner: () => null, getEditors: () => { throw new Error('権限が無い'); } };
+  assert.equal(MiraiDb.ownershipOf(opaque, 'sensei@example.ed.jp'), 'unknown');
+
+  // メールが取れない（公開設定がドメイン外を含む等）→ 判定できない
+  assert.equal(MiraiDb.ownershipOf(owned, ''), 'unknown');
+
+  // 'unknown' は「通す」けれど「自動でやる」ではない、を明示しておく
+  assert.equal(MiraiDb.mayBecomeFirstTeacher(opaque, 'anyone@example.ed.jp'), true,
+    'ボタンを押せば通る');
+  assert.notEqual(MiraiDb.ownershipOf(opaque, 'anyone@example.ed.jp'), 'owner',
+    'が、画面を出さずに自動登録してはいけない');
 });
