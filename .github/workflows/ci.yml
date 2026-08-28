@@ -31,7 +31,7 @@ jobs:
       # 原本を直したのに npm run build を忘れて push した場合、
       # ビルドも静的解析も通ってしまい、動かすまで気づけない。ここで止める。
       - name: 生成物が原本と食い違っていないか
-        run: node tools/verify-generated.mjs
+        run: node tools/vendor/verify-generated.mjs
 
       - name: 品質ゲート（GIGA Standard v5）
         run: npm run check
