@@ -18,7 +18,8 @@
     "gas:push": "node scripts/gas-deploy.mjs push",
     "deploy": "node scripts/gas-deploy.mjs deploy",
     "build:sw": "node tools/build-sw.mjs",
-    "check:secrets": "node tools/check-secrets.mjs"
+    "check:secrets": "node tools/check-secrets.mjs",
+    "build:fonts": "node tools/fonts/build-fonts.mjs"
   },
   "dependencies": {
     "bootstrap": "5.3.0",

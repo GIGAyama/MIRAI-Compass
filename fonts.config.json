@@ -1,0 +1,26 @@
+{
+  "family": "Zen Maru Gothic",
+  "weights": [
+    500
+  ],
+  "grades": [],
+  "scan": [
+    "index.html",
+    "css.html",
+    "js_core.html",
+    "js_student.html",
+    "js_teacher.html",
+    "js_worksheet.html",
+    "code.gs"
+  ],
+  "scanExt": [
+    ".html",
+    ".gs"
+  ],
+  "embed": true,
+  "cssPath": "fonts.html",
+  "oflPath": "OFL.txt",
+  "generator": "tools/fonts/build-fonts.mjs",
+  "license": "Zen Maru Gothic 500 — SIL Open Font License 1.1（全文は OFL.txt）",
+  "copyright": "Copyright 2021 The Zen Maru Gothic Project Authors (https://github.com/googlefonts/zen-marugothic)"
+}
