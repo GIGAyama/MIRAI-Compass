@@ -153,10 +153,29 @@
   <!-- フッターのリンクは既定で 49×16px / 84×18px しかなかった。
        css.html の footer a::after で当たり判定だけを 44px に広げている
        （見た目は変えず、指で押せるようにするため）。 -->
-  <footer class="no-print text-center text-muted py-2 border-top transition-bg d-flex justify-content-center align-items-center gap-3">
-    <small>&copy; 2026 みらいコンパス <a href="https://giga-school.com" target="_blank" rel="noopener" class="d-inline-block text-decoration-none text-muted">GIGA山</a>
-      <a href="https://giga-school.com/apps/mirai-compass/" target="_blank" rel="noopener" class="d-inline-block text-decoration-none text-muted ms-2">使い方を読む</a></small>
-    <a href="#" class="d-inline-block text-decoration-none text-muted small" style="font-size:0.75rem;" onclick="attemptTeacherLogin(); return false;">教員用ログイン</a>
+  <!-- ⚠️ 1 行に収める。flex-nowrap と、クレジット側の min-width:0 の 2 つが要る。
+       nowrap だけだと、クレジットの文字列が縮まずに列を押し広げて
+       横スクロールになる。狭い画面ではクレジットが … で切れる。 -->
+  <footer class="no-print text-center text-muted py-1 border-top transition-bg d-flex flex-nowrap justify-content-center align-items-center gap-2">
+    <small class="text-truncate" style="min-width:0;">&copy; 2026 みらいコンパス <a href="https://giga-school.com" target="_blank" rel="noopener" class="d-inline-block text-decoration-none text-muted">GIGA山</a></small>
+    <!-- ⚠️ 行き先のリンクを手で書かないこと。中身は正本の部品
+         standards/web/giga-app-links.js（配布物 web/giga-app-links.js）が
+         この中に出す。GAS へは giga_links.html として焼き込んで送る
+         （tools/build-app-links.mjs と .claspignore）。
+         文言も並びも行き先も、あちらで決まっている。
+
+         ⚠️ ここにあった「使い方を読む」（紹介記事へのリンク）は外した。
+            紹介記事は「なぜ作ったか」を、まだ使っていない先生に向けて
+            書いたもので、いま画面の前で困っている人が求めるものではない。
+            艦隊のほかのアプリでも既に外れている。
+
+         ⚠️ <div> にしないこと。そこで改行が入ってフッターが 2 行になる。
+
+         ⚠️ 出すものは giga_links.html 側（window.GIGA_APP_LINKS）で
+            "terms,privacy" に絞ってある。まだ docs/manual/ が無く、
+            既定のまま出すと行き止まりの「つかいかた」が 1 本増えるため。 -->
+    <span data-giga-links></span>
+    <a href="#" class="d-inline-block text-decoration-none text-muted small text-nowrap" style="font-size:0.75rem;" onclick="attemptTeacherLogin(); return false;">教員用ログイン</a>
   </footer>
 
   <!--
@@ -186,6 +205,17 @@
 
   <!-- 4. ワークシート統合（回答・作成・添削の自己完結モジュール） -->
   <?!= include('js_worksheet'); ?>
+
+  <!--
+    利用規約・プライバシーへの行き先。中身は正本の部品
+    standards/web/giga-app-links.js（配布物 web/giga-app-links.js）です。
+    giga_links.html は tools/build-app-links.mjs が焼き込む生成物なので、
+    手で編集しないこと。
+
+    ⚠️ .claspignore に !giga_links.html が要る。送られないと、GAS の画面
+       だけリンクが出ない。エラーにはならないので、開いて見るまで気づけない。
+  -->
+  <?!= include('giga_links'); ?>
 
 </body>
 </html>
