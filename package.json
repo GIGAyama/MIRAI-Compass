@@ -23,7 +23,7 @@
     "build:app-links": "node tools/build-app-links.mjs"
   },
   "dependencies": {
-    "bootstrap": "5.3.0",
+    "bootstrap": "5.3.8",
     "bootstrap-icons": "1.11.1",
     "chart.js": "4.5.1",
     "fabric": "5.3.0-browser",
